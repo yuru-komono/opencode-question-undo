@@ -68,7 +68,16 @@ from undo_core import (
     tail_outcome,
 )
 
-PINNED_VERSION = "2.3.2"
+# Console encoding guard: when stdout is a pipe, the locale encoding (e.g. cp932) becomes the
+# default, and printing a session title with an unencodable character (U+2014 etc.) crashes with
+# UnicodeEncodeError. errors="replace" swaps only unencodable characters for ? (v0.5.1).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+PINNED_VERSION = "2.4.0"
 SID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # message.list default page is the newest 50 (measured on v2.3.2). limit=1000 returns HTTP 400, so use 200.
 MSG_QUERY = "?limit=200"

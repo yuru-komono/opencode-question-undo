@@ -1,5 +1,5 @@
 // undo-server.js — server-side plugin part that redoes only the latest answered question
-// (OpenCode 2.3.2 measured, stage-only by default).
+// (OpenCode 2.4.0 measured, stage-only by default).
 //
 // Flow: /undo-answer → locate the latest answered question → compute the boundary →
 //       revert/stage (files:false) + save a record →
@@ -12,7 +12,8 @@
 // Removal: delete this file + src/undo-kernel.js and the single plugins entry in the config.
 //
 // The server-side ctx has no `session.revert.*` and no message list (measured on the 2.3.2 SDK:
-// the Pick list in dist/promise/session.d.ts and the allowlist in adapter.js). Only those three
+// the Pick list in dist/promise/session.d.ts and the allowlist in adapter.js; re-confirmed still
+// missing on the 2.4.0 SDK, v0.5.1). Only those three
 // operations go through the SWAP-POINT block below calling `opencode api`. When upstream exposes
 // ctx.session.revert, replacing just that block is the whole migration.
 //
@@ -38,12 +39,13 @@ import {
   tailOutcome,
 } from "./undo-kernel.js";
 
-// Server version gate. Verified only on this value (v2.3.2).
+// Server version gate. Verified only on this value (v2.4.0; the 2.3.2 measurements are in history).
 // Gate policy (v0.5.0): newer and unparseable versions warn and run; older is refused.
-// The engines "2.3.2" in package.json records the verified version, not an accepted range (see README).
-const PINNED_VERSION = "2.3.2";
+// The engines "2.4.0" in package.json records the verified version, not an accepted range (see README).
+const PINNED_VERSION = "2.4.0";
 
-// Boundary mode. afterQuestionStep is measured on v2.3.2. If an upstream update breaks the
+// Boundary mode. afterQuestionStep is measured on v2.3.2 and re-verified on v2.4.0 (v0.5.1).
+// If an upstream update breaks the
 // after-boundary, flip this one line to questionStep (v0.1.0 behavior).
 const BOUNDARY_MODE = "afterQuestionStep";
 
@@ -126,7 +128,7 @@ const TEXT = {
 };
 
 // ---------------------------------------------------------------------------
-// SWAP-POINT: bridge for only the 3 operations missing from the 2.3.2 server ctx.
+// SWAP-POINT: bridge for only the 3 operations missing from the 2.3.2/2.4.0 server ctx.
 // When upstream exposes ctx.session.revert / message.list, replace just this block.
 // Direct HTTP is UnauthorizedError (measured), so going through `opencode api` is required
 // (same approach as tools/fetch_api.py).

@@ -1,14 +1,19 @@
 # question-undo（日本語）
 
-> **⚠ 本番セッションで使う前に必ずお読みください。** 本ツールはセッションに取り消せない変更を加え得ます。stage 中の新規送信は stage を確定させ、非表示になった末尾は復元不能になります。CLI の `--commit` は履歴を即座に削除します。**思い入れのあるセッションでいきなり使わず、必ず使い捨てのダミーセッションで手順を繰り返し、完全に信頼できるまで動作を確認してください。** これは私用ツールの善意公開です。サポートは無く、このリポジトリの issue は無効です。fork・改良は歓迎します。
+> **⚠ 本番業務に関わるセッションで使う前に必ずお読みください。** 本ツールは**セッションに破壊的な変更を加えるツールであり、サポートは不提供**です。巻き戻るのは**セッションのタイムラインだけ**で、質問後の作業で編集・作成・削除されたファイルは**一切巻き戻らない**。stage 中の新規送信は stage を確定させ、非表示になった末尾は復元不能になり、CLI の `--commit` は履歴を即座に削除する。**question の答えを間違えたと気づいたら、可能なかぎり早く Esc で応答を停止し、本ツールの実行を検討すること。** 気づくのが遅れるほど後続の作業が巻き戻し対象に増える。**いきなり本番業務に関わるセッションで使わず、必ず使い捨てのダミーセッションで手順を繰り返し、完全に信頼できるまで動作を確認してください。** ハーネスは question ツールを専用 step で呼ぶことが**必須**（下記「必須要件」節）。未徹底の場合、`--mode question`・`questionStep` 退避モード・GUI の取り消しでは質問 step の本文とツール結果まで失われる。これは私用ツールの善意公開です。サポートは無く、このリポジトリの issue は無効です。fork・改良は歓迎します。
 
-OpenCode (v2.3.2 実測) の `question` ツール回答だけをやり直すツール。回答済み question の**直後**から `revert/stage` するので、質問を提示した step の本文と回答済み question は画面に残り、その後に進んだ作業だけが一時的に取り消される。履歴の削除（commit）は既定で行わない。
+OpenCode (v2.4.0 実測) で**答えを間違えた question に答え直す**ツール。「質問を再表示させる」はそのための手段で、回答済み question の**直後**から `revert/stage` して、質問を提示した step の本文と回答済み question を画面に残したまま、その後に進んだ作業だけを一時的に取り消し、同じ question を一字一句そのまま再提示する。履歴の削除（commit）は既定で行わない。**質問自体を考え直させる機能は持たない** — 質問文・選択肢・multiple は一字一句そのまま再提示される。
 
 **Desktop・Web UI・TUI の三面で同じコマンドが使える**。再提示は composer への注入文書き込みではなく、**保存された指示文をサーバーが直接送信する**方式（入力欄を触らないため、誤編集や消去で指示を失わない）。
 
 ## 目的
 
-`question` の選択肢回答を取り消して、同じ質問をもう一度出したい。OpenCode v2.3.2 には question 回答用の undo が無く、上流 issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) も未実装（2026-11-23 時点で open 確認済み。question の再回答は別 issue に分離して後回しと明記されている）。このツールは revert（stage/commit）を question 境界で発動するだけで、その後の再実行・解除は各面の標準操作そのままに行える。
+**主目的は「答えを間違えた question に答え直す」こと**で、同じ question を一字一句そのまま再提示するのはその手段である。`question` の選択肢回答を取り消して、同じ質問にもう一度答えたい。OpenCode v2.4.0（2026-11-23 リリース）にも question 回答用の undo は無く、上流 issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) も未実装（2026-11-23 時点で open 確認済み。question の再回答は別 issue に分離して後回しと明記されている）。このツールは revert（stage/commit）を question 境界で発動するだけで、その後の再実行・解除は各面の標準操作そのままに行える。
+
+**このツールがしないこと:**
+
+- 質問の内容を変えること。再提示される question は文言・選択肢・multiple まで同一。質問自体が不適当だった（選択肢が悪い、問い方が wrong）場合、本ツールでは直せない
+- ファイルを巻き戻すこと。質問後の作業で編集・作成・削除されたファイルはそのまま残る（巻き戻り対象はセッションのタイムラインのみ）
 
 確認提示をまたいで実装まで進んだ後で「あの確認からやり直したい」という場面向け。実装の作業だけを捨て、確認提示の本文と質問文はそのまま残したい。
 
@@ -21,6 +26,8 @@ OpenCode (v2.3.2 実測) の `question` ツール回答だけをやり直すツ�
 三面（Desktop の窓・ブラウザ面の Web UI・TUI）すべてで `/undo-answer` が補完に出る。
 
 ## 使い方（二段階フロー）
+
+**答えを間違えたと気づいたら**: まず Esc で進行中の応答を止める（セッション実行中は stage できない）。それからできるだけ早く `/undo-answer` を実行することを勧める。気づくのが遅れるほど後続の作業 message が巻き戻し対象に増え、stage の可逆性は次の送信までしか保たれない。
 
 1. セッションを開いた状態で、入力欄に `/undo-answer`
    - 最新 question 回答を特定し、**回答済み question の直後の作業 message を境界**として `revert/stage` する。以後の作業が非表示になり、質問提示 step の本文と回答済み question カードは残る
@@ -53,6 +60,7 @@ python tools/smoke.py --session <sid> --clear                      # stage 解�
 
 ## 安全
 
+- **巻き戻るのはセッションのタイムラインだけ**。質問後の作業で編集・作成・削除されたファイルは一切巻き戻らない。本ツールはセッションに破壊的な変更を加えるツールであり、サポートは不提供（先頭警告も参照）
 - 既定は **stage のみ（可逆）**。履歴が削れる commit は CLI の明示フラグの裏側-only
 - **stage の可逆性は「次の送信まで」**。staged のまま新規メッセージを送ると stage が確定（commit 相当）され、非表示になった末尾は復元不能になる。解除は送信前に `/undo-answer-cancel`（または `--clear`）を行うこと
 - 境界は message 単位で**境界 message 自身も含む**。既定境界は回答済み question の直後の作業 message なので、質問を提示した step は巻き込まれない
@@ -67,11 +75,11 @@ python tools/smoke.py --session <sid> --clear                      # stage 解�
 
 ## 限界と前提
 
-- **版本門（v0.5.0 方針）**。実行時にサーバー版を検証済み 2.3.2 と比較し、**新し目と解析不能形（接尾辞・dev ビルド等）は警告して実行、古いは拒否**。CLI の読み取り専用モード（`--list` / `--inspect` / `--print-prompt`）は旧版でも警告して実行し、`--allow-version-drift` は旧版で実行するための脱出口。plugin 側の警告はサーバーログにしか出ない（三面に非遮断の警告チャネルが無い）。`package.json` の `engines: 2.3.2` は実測版の意味で受理範囲ではない。OpenCode の更新後は再検証のこと
-- **Windows のみ実測**。実測はすべて Windows 11 の OpenCode 2.3.2（三面）で実施。POSIX 面（Linux/macOS）は未検証。CLI ブリッジは `shutil.which` で解決するため動く見込みだが、検証済みではない
-- **message 粒度**: 削除境界は assistant メッセージ単位。境界以降の全 step が消える。question ツールを本文なしの専用 step で呼ぶ運用（下記の「推奨規則」）で、実質 part 粒度と等価になる
+- **版本門（v0.5.0 方針）**。実行時にサーバー版を検証済み 2.4.0 と比較し、**新し目と解析不能形（接尾辞・dev ビルド等）は警告して実行、古いは拒否**。CLI の読み取り専用モード（`--list` / `--inspect` / `--print-prompt`）は旧版でも警告して実行し、`--allow-version-drift` は旧版で実行するための脱出口。plugin 側の警告はサーバーログにしか出ない（三面に非遮断の警告チャネルが無い）。`package.json` の `engines: 2.4.0` は実測版の意味で受理範囲ではない。OpenCode の更新後は再検証のこと
+- **Windows のみ実測**。三面での実測はすべて Windows 11 の OpenCode 2.3.2 で実施。2.4.0 の再検証は稼働サーバーの疎通・CLI（一覧・inspect・境界計算）・コマンド登録のレベルまでで、三面のフルフローは行っていない。POSIX 面（Linux/macOS）は未検証。CLI ブリッジは `shutil.which` で解決するため動く見込みだが、検証済みではない
+- **message 粒度**: 削除境界は assistant メッセージ単位。境界以降の全 step が消える。question ツールを本文なしの専用 step で呼ぶ運用（下記の「必須要件」）で、実質 part 粒度と等価になる
 - **再提示は model 依存**: 指示文は question の文言・選択肢・multiple を一字一句運ぶが、再実行するのは model 自身。使い捨てセッションでの実測では、指示文送信後の再提示が payload の JSON 一致で True
-- **サーバー側 ctx の欠落**: 2.3.2 のサーバー plugin には `session.revert` と message 一覧の API が無い。この 3 操作（一覧・stage・clear）だけは `opencode api` 経由のブリッジで行う（`src/undo-server.js` の SWAP-POINT ブロック。上流が API を公開したらそのブロックだけを差し替える）。サーバープロセスから `opencode` CLI が解決できることが前提で、解決できない場合は環境変数 `QUESTION_UNDO_CLI` で exe のパスを指定できる（`smoke.py` 側も同じ環境変数を見る）
+- **サーバー側 ctx の欠落**: 2.3.2/2.4.0 のサーバー plugin には `session.revert` と message 一覧の API が無い（2.4.0 は SDK 型定義で再確認済み）。この 3 操作（一覧・stage・clear）だけは `opencode api` 経由のブリッジで行う（`src/undo-server.js` の SWAP-POINT ブロック。上流が API を公開したらそのブロックだけを差し替える）。サーバープロセスから `opencode` CLI が解決できることが前提で、解決できない場合は環境変数 `QUESTION_UNDO_CLI` で exe のパスを指定できる（`smoke.py` 側も同じ環境変数を見る）
 - **検索窓**: 一覧は 200 件まで広げているが、それを超える古い question は見つからない。窓を溢れる場合は question が見つからない旨で安全側に拒否する。fork・branch 由来のセッションは messageID の形が変わるため時系列で特定する
 - **案内行は出さない**: stage 成功の案内は送らない（`session.synthetic` を `resume:false` で送るが、これは実行を起こさずタイムラインにも `message.list` にも出ない。実測済み。既定値で送ると model が案内行に反応して発話するため）。成否の判断材料は staged 描画の変化と、拒否時のエラー文
 - **境界の後退手段**: 上流更新で「回答済み question の直後」境界が使えなくなったら、`src/undo-server.js` の `BOUNDARY_MODE` を `"questionStep"` の 1 行変更で v0.1.0 動作へ戻せる
@@ -84,19 +92,34 @@ python tools/smoke.py --session <sid> --clear                      # stage 解�
 - 「他の境界で staged です」: 先に `/undo-answer-cancel`（または `--clear`）で解除する
 - 「staged 境界が 2 回の読み取りで変化しました」: 他の面が同時に stage した。タイムラインを確認し、必要なら `/undo-answer-cancel` で解除してから再実行
 - 「回答済み question の後に作業 message が無い」: 後続の作業がまだ始まっていない。question そのものからやり直すなら CLI の `--mode question`
-- 版本不一致の案内: 本ツールは v2.3.2 で実測。サーバーが古ければ三面とも拒否文を出す（実行するには CLI の `--allow-version-drift`）。新し目は警告だけ出して実行するが、警告はサーバー／sidecar ログにのみ出て UI には出ない。更新後は `smoke.py --list` / `--inspect` で境界挙動を再確認してから再検証する
+- 版本不一致の案内: 本ツールは v2.4.0 で実測。サーバーが古ければ三面とも拒否文を出す（実行するには CLI の `--allow-version-drift`）。新し目は警告だけ出して実行するが、警告はサーバー／sidecar ログにのみ出て UI には出ない。更新後は `smoke.py --list` / `--inspect` で境界挙動を再確認してから再検証する
 
 ## 上流 #8689 実装時の削除
 
-上流で question 対応の revert/fork が実装されたら、設定の `plugins` の 1 行とこのリポジトリを削除するだけ。DB や設定への残留は無い（サーバー API のみ使用）。下記の推奨規則は native revert の粒度改善にも効くため、ツール撤去後も独立して維持してよい。
+上流で question 対応の revert/fork が実装されたら、設定の `plugins` の 1 行とこのリポジトリを削除するだけ。DB や設定への残留は無い（サーバー API のみ使用）。下記の必須要件は native revert の粒度改善にも効くため、ツール撤去後も独立して維持してよい。
 
-## 推奨規則: question は専用 step で呼ぶ
+## 必須要件: question ツールは専用 step で呼ぶこと
 
-assistant は question ツールを呼ぶ step を専用にすること。同一 step に本文テキストや他のツール呼び出しを含めない。OpenCode の `revert/stage` は message 粒度で、境界メッセージ以降が丸ごと消える。question が本文や他ツールと同一 message に混在すると、「回答だけやり直し」でもその step の全出力が失われる。question 専用 step が徹底されていれば、message 粒度は実質 part 粒度と等価になり、本ツール（および GUI 標準 revert）の主要な限界が解消される。
+本ツールは、ハーネス（システムプロンプト等）が次の規則を徹底していることを**前提**とする。未徹底の場合、下表の経路で質問 step がもろとも破壊される。
+
+**規則**: assistant は `question` ツールを専用 step で呼ぶこと。同一 step に本文テキストや他のツール呼び出しを含めない。質問の前に説明が必要なときは本文だけの step を先に終え、次の step で question だけ呼ぶ。
+
+| 経路 | question が同一 message に混在時の結果 |
+|---|---|
+| 既定境界（回答済み question の直後） | 質問 step は巻き込まれない（安全） |
+| CLI `--mode question` / `questionStep` 退避モード | **step 全体（本文・ツール結果込み）が消える** |
+| GUI で質問 message を右クリック「取り消す」 | メッセージ全体が消える |
+| 上流 #8689 の revert/fork（予定） | message 粒度で同じ破壊が起こる |
+
+専用 step が徹底されていれば message 粒度は実質 part 粒度と等価になり、「回答だけやり直し」はどの経路でも無損失になる。
+
+**ハーネスへ挿入できる例文**:
+
+> assistant は `question` ツールを専用 step で呼ぶこと。同一 step に本文テキストや他のツール呼び出しを含めない。質問の前に説明が必要なときは本文だけの step を先に終え、次の step で question だけ呼ぶ。根拠: OpenCode の revert は message 粒度で、question が本文や他ツールと同一 message に混在すると、question のやり直し時にその step の全出力が失われる。
 
 ## 出典とライセンス
 
-このコードはローカルで動作する Qwen 系モデルによって生成されたもので、設計・レビュー・実測は人間が行った。ライセンスは MIT（`LICENSE` 参照）。
+開発は OpenCode（エージェント運用）で実施し、コード生成はローカル動作の Qwen 系モデル（Qwen3.8 Flash Next ベース、IQ3_S 量子化ビルド）による。設計・レビュー・実機検証は人間が行った。ライセンスは MIT（`LICENSE` 参照）。
 
 ## メンテナンス体制
 
