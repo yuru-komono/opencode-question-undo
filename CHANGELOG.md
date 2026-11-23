@@ -4,6 +4,16 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-23
+
+### Changed
+
+- README — clarified why file rollback is not offered: file-snapshot rewind is verified upstream, but it also overwrites edits you or another session made after the question; to roll back files, use OpenCode's built-in `/undo` (requires Git)
+- README (Japanese) — unified the writing style
+- README (Japanese) — removed English wording that was not a necessary technical term
+- README — moved the "Requirement" section to right after "Safety" in both the English and Japanese READMEs
+- README — merged the duplicated file-rollback statements into one
+
 ## [0.5.1] - 2026-11-23
 
 ### Changed

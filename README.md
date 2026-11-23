@@ -60,7 +60,7 @@ python tools/smoke.py --session <sid> --clear                      # clear the s
 
 ## Safety
 
-- **Only the session timeline is rewound.** Files edited, created or deleted by the work after the question are not rolled back at all. This tool makes destructive changes to a session and comes with no support (see the warning at the top).
+- **Only the session timeline is rewound.** Files edited, created or deleted by the work after the question are not rolled back at all. `revert/stage` is called with `files:false`; file-snapshot rewind (`files=true`) is verified upstream (it restores only the paths touched by the work steps after the boundary, to their state at the boundary — requires Git), but it is not offered because it also silently overwrites edits you made by hand or in another session after the question. To roll back files as well, use OpenCode's built-in `/undo` (requires Git). This tool makes destructive changes to a session and comes with no support (see the warning at the top).
 - Default is **stage only (reversible)**. The commit that deletes history lives only behind explicit CLI flags.
 - **The stage is reversible only until the next send.** Sending a new message while staged commits the stage; the hidden tail becomes unrecoverable. Clear with `/undo-answer-cancel` (or `--clear`) before sending.
 - Boundaries are per message and **include the boundary message itself**. The default boundary is the work message right after the answered question, so the asking step is never swept up.
@@ -68,35 +68,9 @@ python tools/smoke.py --session <sid> --clear                      # clear the s
 - If another surface stages concurrently, post-stage verification detects the staged-boundary change across two reads and **refuses without clearing someone else's stage** (2.3.2 has no compare-and-set; this is a narrowing, not an elimination).
 - Re-presentation records expire after 7 days (prevents replay onto a reused session id). Records of deleted sessions can never be reclaimed because storage exposes no enumeration API (accepted limitation).
 - Sessions with an unanswered question on screen are refused: a pending question inside the staged range would remove the question from the timeline entirely, and a later send would make that permanent (measured on v2.3.2).
-- `files=false` is fixed. File-snapshot rewind (`files=true`) is not offered because its semantics were not verified.
 - Staging fails while the session is running (the command refuses with guidance; the CLI sees HTTP 409 / `SessionBusy`). **Press Esc to interrupt, then run again** — this tool never interrupts automatically.
 - The target is only "the latest question answer in this session's chronology". It never searches across fork/subagent history copies.
 - With several surfaces in use at once, a stage made first by another surface makes the recorded boundary mismatch, and the run refuses (mix-up prevention).
-
-## Limitations and assumptions
-
-- **Version gate (v0.5.0 policy).** At run time the server version is compared with the verified 2.4.0: **newer versions and unparseable forms (suffixes, dev builds, ...) warn and run; older versions are refused.** The CLI's read-only modes (`--list` / `--inspect` / `--print-prompt`) run with a warning even on older servers, and `--allow-version-drift` is the escape hatch for running on an older one. The plugin-side warning goes only to the server log (the three surfaces have no non-blocking warning channel). The `engines: 2.4.0` field in `package.json` records the verified version, not an accepted range. Re-verify after any OpenCode update.
-- **Measured on Windows only.** Full-surface measurements were made on Windows 11 with the Desktop/Web/TUI surfaces of OpenCode 2.3.2; the 2.4.0 re-verification covered the live server, the CLI (list/inspect/boundary) and command registration, not a full three-surface rehearsal. The POSIX side (Linux/macOS) is untested; the CLI bridge there resolves `opencode` via `shutil.which` and should work, but nothing is verified.
-- **Message granularity.** The deletion boundary is per assistant message; every step from the boundary on disappears. If the question tool is called in a dedicated step with no body text (required convention, see "Requirement" below), message granularity becomes effectively part granularity.
-- **Re-presentation depends on the model.** The instruction carries the question text, options and multiple values verbatim, but the model itself re-runs the call. In measurements on disposable sessions, the re-presented question matched the payload JSON exactly.
-- **Missing server-side ctx APIs.** The 2.3.2/2.4.0 server plugin has no `session.revert` or message-list API (re-confirmed on the 2.4.0 SDK), so exactly those three operations (list, stage, clear) go through an `opencode api` bridge (the SWAP-POINT block in `src/undo-server.js`; when upstream exposes the API, replacing just that block is the whole migration). The server process must be able to resolve the `opencode` CLI; if it cannot, set the `QUESTION_UNDO_CLI` environment variable to the executable path (`smoke.py` honors the same variable).
-- **Search window.** The message list is widened to 200 entries; older questions beyond that window are not found, and the tool refuses safely with "no answered question found". Fork/branch-derived sessions rewrite message ids, so ordering is chronological, not lexicographic.
-- **No notice line.** A successful stage sends no notice (`session.synthetic` with `resume:false` produces no timeline and no `message.list` entry; measured). With the default resume the model would react to the notice and start talking. Judge success from the staged rendering change and from refusal messages.
-- **Boundary fallback.** If an upstream update breaks the "right after the answered question" boundary, changing the single `BOUNDARY_MODE` line in `src/undo-server.js` to `"questionStep"` restores v0.1.0 behavior.
-
-## Troubleshooting
-
-- Commands do not appear: check that the three names are in `opencode api get /api/command`; if not, check the `plugins` config and restart the server.
-- "The server process cannot resolve the opencode CLI": the server's PATH lacks `opencode`. Set `QUESTION_UNDO_CLI` to the full executable path.
-- "The session is running": press Esc to interrupt, then run `/undo-answer` again.
-- "A revert is already staged at another boundary": clear first with `/undo-answer-cancel` (or `--clear`).
-- "The staged boundary changed between two reads": another surface staged concurrently. Check the timeline, clear if needed, then re-run.
-- "No work message after the answered question": the follow-up work has not started. To redo the question itself, use the CLI's `--mode question`.
-- Version mismatch message: this tool is verified on v2.4.0. On an older server all three surfaces refuse with a message (to run anyway, use the CLI's `--allow-version-drift`). On a newer server it runs with a warning that appears only in the server/sidecar log, never in the UI. After an update, re-check boundary behavior with `smoke.py --list` / `--inspect` before trusting it.
-
-## Removal once upstream implements #8689
-
-When upstream ships revert/fork from user messages with question support, delete the single `plugins` entry and this repository. Nothing else remains in the database or config (server API only). The requirement below also improves the granularity of native revert, so it stays worth keeping after removal.
 
 ## Requirement: call `question` in a dedicated step
 
@@ -116,6 +90,31 @@ With dedicated question steps, message granularity becomes effectively part gran
 **Rule text you can paste into your harness:**
 
 > The assistant must call the `question` tool in a dedicated step: no body text and no other tool calls in the same step. If explanatory text is needed before a question, end that step first and call `question` in the next one. OpenCode's revert is message-granular, so a question sharing a message with other content drags that content into any redo of the question.
+
+## Limitations and assumptions
+
+- **Version gate (v0.5.0 policy).** At run time the server version is compared with the verified 2.4.0: **newer versions and unparseable forms (suffixes, dev builds, ...) warn and run; older versions are refused.** The CLI's read-only modes (`--list` / `--inspect` / `--print-prompt`) run with a warning even on older servers, and `--allow-version-drift` is the escape hatch for running on an older one. The plugin-side warning goes only to the server log (the three surfaces have no non-blocking warning channel). The `engines: 2.4.0` field in `package.json` records the verified version, not an accepted range. Re-verify after any OpenCode update.
+- **Measured on Windows only.** Full-surface measurements were made on Windows 11 with the Desktop/Web/TUI surfaces of OpenCode 2.3.2; the 2.4.0 re-verification covered the live server, the CLI (list/inspect/boundary) and command registration, not a full three-surface rehearsal. The POSIX side (Linux/macOS) is untested; the CLI bridge there resolves `opencode` via `shutil.which` and should work, but nothing is verified.
+- **Message granularity.** The deletion boundary is per assistant message; every step from the boundary on disappears. If the question tool is called in a dedicated step with no body text (required convention, see "Requirement" above), message granularity becomes effectively part granularity.
+- **Re-presentation depends on the model.** The instruction carries the question text, options and multiple values verbatim, but the model itself re-runs the call. In measurements on disposable sessions, the re-presented question matched the payload JSON exactly.
+- **Missing server-side ctx APIs.** The 2.3.2/2.4.0 server plugin has no `session.revert` or message-list API (re-confirmed on the 2.4.0 SDK), so exactly those three operations (list, stage, clear) go through an `opencode api` bridge (the SWAP-POINT block in `src/undo-server.js`; when upstream exposes the API, replacing just that block is the whole migration). The server process must be able to resolve the `opencode` CLI; if it cannot, set the `QUESTION_UNDO_CLI` environment variable to the executable path (`smoke.py` honors the same variable).
+- **Search window.** The message list is widened to 200 entries; older questions beyond that window are not found, and the tool refuses safely with "no answered question found". Fork/branch-derived sessions rewrite message ids, so ordering is chronological, not lexicographic.
+- **No notice line.** A successful stage sends no notice (`session.synthetic` with `resume:false` produces no timeline and no `message.list` entry; measured). With the default resume the model would react to the notice and start talking. Judge success from the staged rendering change and from refusal messages.
+- **Boundary fallback.** If an upstream update breaks the "right after the answered question" boundary, changing the single `BOUNDARY_MODE` line in `src/undo-server.js` to `"questionStep"` restores v0.1.0 behavior.
+
+## Troubleshooting
+
+- Commands do not appear: check that the three names are in `opencode api get /api/command`; if not, check the `plugins` config and restart the server.
+- "The server process cannot resolve the opencode CLI": the server's PATH lacks `opencode`. Set `QUESTION_UNDO_CLI` to the full executable path.
+- "The session is running": press Esc to interrupt, then run `/undo-answer` again.
+- "A revert is already staged at another boundary": clear first with `/undo-answer-cancel` (or `--clear`).
+- "The staged boundary changed between two reads": another surface staged concurrently. Check the timeline, clear if needed, then re-run.
+- "No work message after the answered question": the follow-up work has not started. To redo the question itself, use the CLI's `--mode question`.
+- Version mismatch message: this tool is verified on v2.4.0. On an older server all three surfaces refuse with a message (to run anyway, use the CLI's `--allow-version-drift`). On a newer server it runs with a warning that appears only in the server/sidecar log, never in the UI. After an update, re-check boundary behavior with `smoke.py --list` / `--inspect` before trusting it.
+
+## Removal once upstream implements #8689
+
+When upstream ships revert/fork from user messages with question support, delete the single `plugins` entry and this repository. Nothing else remains in the database or config (server API only). The requirement above also improves the granularity of native revert, so it stays worth keeping after removal.
 
 ## Provenance and license
 
