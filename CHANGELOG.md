@@ -2,6 +2,14 @@
 
 Notable changes to this artifact are recorded in this file. The format follows Keep a Changelog 1.1.0 and the versions follow Semantic Versioning.
 
+## [0.5.0] - 2026-11-23
+
+### Changed
+
+- Runtime version gate — OpenCode versions newer than the verified one warn and run; older versions are refused
+- CLI `--allow-version-drift` — now the escape hatch for running on an older server (newer versions run by default)
+- Upstream issue #8689 — confirmed still unimplemented (open as of 2026-11-23)
+
 ## [0.4.0] - 2026-11-23
 
 ### Added

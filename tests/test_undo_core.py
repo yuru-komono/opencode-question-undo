@@ -180,5 +180,25 @@ class TestAdminTypes(unittest.TestCase):
         self.assertNotIn("user", undo_core.ADMIN_TYPES)
 
 
+class TestCompareVersions(unittest.TestCase):
+    """The four version-gate verdict tokens (hand-mirrored table with tests/undo-kernel.test.js)."""
+
+    def test_verdicts(self):
+        self.assertEqual(undo_core.compare_versions("2.3.2", "2.3.2"), "same")
+        self.assertEqual(undo_core.compare_versions("2.4.0", "2.3.2"), "newer")
+        self.assertEqual(undo_core.compare_versions("2.3.1", "2.3.2"), "older")
+        self.assertEqual(undo_core.compare_versions("2.2.9", "2.3.2"), "older")
+        # numeric segment comparison (lexicographic order would get these wrong)
+        self.assertEqual(undo_core.compare_versions("2.10.0", "2.3.2"), "newer")
+        self.assertEqual(undo_core.compare_versions("3.0.0", "2.99.99"), "newer")
+
+    def test_unknown_forms(self):
+        # trailing newline and Unicode digits pin the Python engine-leniency trap (review finding M1)
+        for v in ("2.3.2-beta.1", "2.3", "2.3.2.1", "", "v2.3.2", " 2.3.2", "2.3.1\n", "٢.٣.٢", None, 2.32, {}):
+            self.assertEqual(undo_core.compare_versions(v, "2.3.2"), "unknown")
+        # a malformed pin side is unknown too (the parity gate #7 shape guard prevents it upstream)
+        self.assertEqual(undo_core.compare_versions("2.3.2", "2.3"), "unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

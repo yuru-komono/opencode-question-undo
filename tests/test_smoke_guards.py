@@ -5,6 +5,8 @@ swapped and only the SystemExit message is verified. version_gate is mocked shut
 guard never touches a real server.
 """
 
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -81,6 +83,57 @@ class TestDefaultMode(unittest.TestCase):
             rc = smoke.main()
         self.assertEqual(rc, 0)
         self.assertEqual(staged.get("messageID"), "w1")  # the work message, not q1, is the boundary
+
+
+class TestVersionGate(unittest.TestCase):
+    """The four-row matrix of version_gate(allow_drift, readonly) (api is mocked; no real server)."""
+
+    def run_gate(self, server_version, allow_drift=False, readonly=False):
+        err = io.StringIO()
+        with mock.patch.object(smoke, "api", return_value={"version": server_version}), \
+             contextlib.redirect_stderr(err):
+            try:
+                smoke.version_gate(allow_drift, readonly)
+                raised = None
+            except SystemExit as e:
+                raised = e
+        return raised, err.getvalue()
+
+    def test_same_silent(self):
+        raised, err = self.run_gate(smoke.PINNED_VERSION)
+        self.assertIsNone(raised)
+        self.assertEqual(err, "")
+
+    def test_newer_warns_and_runs(self):
+        raised, err = self.run_gate("99.0.0")
+        self.assertIsNone(raised)
+        self.assertIn("[warning]", err)
+
+    def test_unknown_warns_and_runs(self):
+        raised, err = self.run_gate("2.3.2-beta.1")
+        self.assertIsNone(raised)
+        self.assertIn("[warning]", err)
+
+    def test_numeric_segments_not_lexicographic(self):
+        # 2.10.0 is newer (string comparison would read "2.10.0" < "2.3.2" and refuse wrongly)
+        raised, err = self.run_gate("2.10.0")
+        self.assertIsNone(raised)
+        self.assertIn("[warning]", err)
+
+    def test_older_rejects_mutating(self):
+        raised, err = self.run_gate("2.3.1")
+        self.assertIsNotNone(raised)
+        self.assertIn("[version gate]", str(raised.code))
+
+    def test_older_readonly_warns(self):
+        raised, err = self.run_gate("2.3.1", readonly=True)
+        self.assertIsNone(raised)
+        self.assertIn("[warning]", err)
+
+    def test_older_with_flag_warns(self):
+        raised, err = self.run_gate("2.3.1", allow_drift=True)
+        self.assertIsNone(raised)
+        self.assertIn("[warning]", err)
 
 
 if __name__ == "__main__":

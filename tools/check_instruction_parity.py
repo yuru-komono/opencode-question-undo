@@ -22,6 +22,12 @@ Checks:
    `admin-only` / `questionStep`) appears on both sides (JS: kernel+server, Python: undo_core+smoke).
 10. The `SID_RE` pattern strings agree (the session-id gate before URL interpolation; the only
     regex whose drift silently widens the attack surface).
+11. The `VERSION_RE` pattern strings agree (the version-gate parse rule; same regex-literal
+    idiom as #10. The Python side carries a `(?a)` prefix for engine semantics parity and it
+    is stripped before comparison; a missing prefix is itself a finding).
+12. The version verdict tokens (`same` / `newer` / `older` / `unknown`) appear as quoted
+    literals inside the comparator bodies, and each gate calls its comparator by name (a
+    whole-file substring check would pass after a rename because comments carry the vocabulary).
 
 Usage:
     python tools/check_instruction_parity.py
@@ -52,6 +58,8 @@ PKG_JSON = ROOT / "package.json"
 
 # Boundary rule-name vocabulary (JS side: kernel+server, Python side: undo_core+smoke).
 RULE_NAMES = ("raw-successor", "skip-idle-to-first-work", "no-work", "admin-only", "questionStep")
+# Version verdict vocabulary (the four tokens returned by compareVersions / compare_versions).
+VERDICT_NAMES = ("same", "newer", "older", "unknown")
 QUOTED_RE = re.compile(r"\"([^\"]+)\"")
 
 
@@ -137,6 +145,41 @@ def sid_re_patterns():
     return out
 
 
+def version_re_patterns():
+    """VERSION_RE pattern strings from both the JS and Python sides. Unreadable sides are None.
+    The Python side is expected to carry the `(?a)` prefix (engine parity; handled by the caller)."""
+    out = {}
+    try:
+        m = re.search(r"const VERSION_RE = /(.+?)/;", JS_FILE.read_text(encoding="utf-8"))
+        out["src/undo-kernel.js"] = m.group(1) if m else None
+    except OSError:
+        out["src/undo-kernel.js"] = None
+    try:
+        m = re.search(r'VERSION_RE = re\.compile\(r"([^"]+)"\)', UNDO_CORE_PY.read_text(encoding="utf-8"))
+        out["tools/undo_core.py"] = m.group(1) if m else None
+    except OSError:
+        out["tools/undo_core.py"] = None
+    return out
+
+
+def comparator_bodies():
+    """Function bodies of the comparator pair (for the scoped verdict-token check). Unreadable sides are None."""
+    out = {}
+    try:
+        m = re.search(r"export function compareVersions\(found, pinned\) \{(.*?)\n\}",
+                      JS_FILE.read_text(encoding="utf-8"), re.DOTALL)
+        out["src/undo-kernel.js"] = m.group(1) if m else None
+    except OSError:
+        out["src/undo-kernel.js"] = None
+    try:
+        m = re.search(r"def compare_versions\(found, pinned\):\n(.*?)(?=\n\ndef |\Z)",
+                      UNDO_CORE_PY.read_text(encoding="utf-8"), re.DOTALL)
+        out["tools/undo_core.py"] = m.group(1) if m else None
+    except OSError:
+        out["tools/undo_core.py"] = None
+    return out
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -192,6 +235,10 @@ def main() -> int:
     for label, value in pins.items():
         if value is None:
             findings.append(f"version pin unreadable: {label}")
+        elif not re.fullmatch(r"[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}", value):
+            # A pin outside the comparator's own parse rule (1-9 ASCII digits per segment)
+            # would return unknown and silently disable the older-version refusal (#7's purpose).
+            findings.append(f"version pin is not plain x.y.z: {label}={value!r}")
     if all(v is not None for v in pins.values()) and len(set(pins.values())) > 1:
         findings.append("version pins differ: " + " / ".join(f"{k}={v}" for k, v in pins.items()))
 
@@ -226,6 +273,39 @@ def main() -> int:
     if all(v is not None for v in sids.values()) and len(set(sids.values())) > 1:
         findings.append("SID_RE patterns differ: " + " / ".join(f"{k}={v!r}" for k, v in sids.items()))
 
+    # 11. VERSION_RE pattern strings (the version-gate parse rule; same idiom as #10). The
+    #     Python `(?a)` prefix is engine-parity normalization for \d and $; strip before compare.
+    vers = version_re_patterns()
+    for label, value in vers.items():
+        if value is None:
+            findings.append(f"VERSION_RE unreadable: {label}")
+    py_re = vers.get("tools/undo_core.py")
+    if py_re is not None:
+        if py_re.startswith("(?a)"):
+            vers["tools/undo_core.py"] = py_re[len("(?a)"):]
+        else:
+            findings.append("Python VERSION_RE lacks the (?a) prefix (engine parity for \\d and $)")
+    if all(v is not None for v in vers.values()) and len(set(vers.values())) > 1:
+        findings.append("VERSION_RE patterns differ: " + " / ".join(f"{k}={v!r}" for k, v in vers.items()))
+
+    # 12. Version verdict tokens, scoped to the comparator bodies (a whole-file substring check
+    #     would pass after a rename because comments carry the vocabulary). Each gate must also
+    #     call its comparator by name.
+    bodies = comparator_bodies()
+    for label, body in bodies.items():
+        if body is None:
+            findings.append(f"comparator body unreadable: {label}")
+            continue
+        for name in VERDICT_NAMES:
+            if f'"{name}"' not in body:
+                findings.append(f"verdict literal missing in comparator body: {label} {name}")
+    for label, needle, text in (
+        ("src/undo-server.js", "compareVersions(", js_server_text),
+        ("tools/smoke.py", "compare_versions(", py_smoke_text),
+    ):
+        if needle not in text:
+            findings.append(f"gate does not call the comparator: {label}")
+
     if findings:
         for f in findings:
             print(f"parity: {f}", file=sys.stderr)
@@ -234,8 +314,9 @@ def main() -> int:
 
     print(
         f"parity: OK (instruction {len(INSTRUCTION_FRAME)} lines, 2 sentinels, {len(FIELD_LABELS)} field labels, "
-        f"{len(CAP_NAMES)} caps, ZWSP match, {len(STRUCT_STRINGS)} structural strings, version pin {pins.get('tools/smoke.py')}, "
-        f"{len(undo_core.ADMIN_TYPES)} ADMIN_TYPES words, {len(RULE_NAMES)} rule names, SID_RE match)"
+        f"{len(CAP_NAMES)} caps, ZWSP match, {len(STRUCT_STRINGS)} structural strings, version pin {pins.get('tools/smoke.py')} (plain x.y.z), "
+        f"{len(undo_core.ADMIN_TYPES)} ADMIN_TYPES words, {len(RULE_NAMES)} rule names, SID_RE match, "
+        f"VERSION_RE match, {len(VERDICT_NAMES)} verdict tokens)"
     )
     return 0
 

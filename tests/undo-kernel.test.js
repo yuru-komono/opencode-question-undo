@@ -1,7 +1,7 @@
 // undo-kernel.test.js — unit tests for the pure logic (node:test, zero added dependencies).
-// The boundary rules, fork ordering, sentinel escape and cap gates are hand-mirrored between the
-// JS and Python sides, so the same fixtures live in tests/test_undo_core.py (update both when a
-// rule changes).
+// The boundary rules, fork ordering, sentinel escape, cap gates and version verdicts are
+// hand-mirrored between the JS and Python sides, so the same fixtures live in
+// tests/test_undo_core.py (update both when a rule changes).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,6 +14,7 @@ import {
   PayloadTooLarge,
   buildInstruction,
   compareMessages,
+  compareVersions,
   computeWorkBoundary,
   escapeSentinels,
   extractPayload,
@@ -182,4 +183,22 @@ test("ADMIN_TYPES: run markers, system injections, compaction and synthetic are 
   }
   assert.equal(ADMIN_TYPES.has("assistant"), false);
   assert.equal(ADMIN_TYPES.has("user"), false);
+});
+
+test("compareVersions: four verdict tokens and numeric segment comparison (the 2.10.0 vs 2.3.2 lexicographic trap)", () => {
+  assert.equal(compareVersions("2.3.2", "2.3.2"), "same");
+  assert.equal(compareVersions("2.4.0", "2.3.2"), "newer");
+  assert.equal(compareVersions("2.3.1", "2.3.2"), "older");
+  assert.equal(compareVersions("2.2.9", "2.3.2"), "older");
+  assert.equal(compareVersions("2.10.0", "2.3.2"), "newer"); // numeric (lexicographic would say older)
+  assert.equal(compareVersions("3.0.0", "2.99.99"), "newer");
+});
+
+test("compareVersions: unparseable forms are unknown (suffixes, dev builds, empty, non-strings)", () => {
+  // trailing newline and Unicode digits pin the Python engine-leniency trap (review finding M1; JS was always strict)
+  for (const v of ["2.3.2-beta.1", "2.3", "2.3.2.1", "", "v2.3.2", " 2.3.2", "2.3.1\n", "٢.٣.٢", undefined, null, 2.32, {}]) {
+    assert.equal(compareVersions(v, "2.3.2"), "unknown", `expected unknown: ${String(v)}`);
+  }
+  // a malformed pin side is unknown too (the parity gate #7 shape guard prevents it upstream)
+  assert.equal(compareVersions("2.3.2", "2.3"), "unknown");
 });

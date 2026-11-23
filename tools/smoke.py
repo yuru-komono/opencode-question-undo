@@ -42,6 +42,11 @@ Usage:
   python tools/smoke.py --session <sid> --clear              # clear the staged revert
   python tools/smoke.py --session <sid> --mode work --apply  # send the instruction (/undo-answer-apply equivalent)
   python tools/smoke.py --session <sid> --mode work --commit --reprompt   # delete then re-send (irreversible)
+
+Version gate (v0.5.0): a server newer than the verified PINNED_VERSION, or an unparseable
+version, warns and runs; an older server is refused. Read-only modes run with a warning even
+on older servers (the re-verification ritual must not be blocked). --allow-version-drift is
+the explicit escape hatch for older servers.
 """
 
 import argparse
@@ -52,6 +57,7 @@ from fetch_api import ApiError, api
 from undo_core import (
     PayloadTooLarge,
     build_instruction,
+    compare_versions,
     compute_work_boundary,
     describe,
     describe_boundary,
@@ -74,14 +80,37 @@ def fetch_messages(sid):
     return d.get("data") if isinstance(d, dict) else d
 
 
-def version_gate(allow_drift):
+def display_version(v):
+    """Display-layer guard: the version string is API-supplied. Show printable ASCII ≤32 chars only, else "unknown" (log-injection prevention).
+
+    Mirror: DISPLAY_VERSION_RE in src/undo-server.js — a hand-mirrored pair; update both sides together.
+    """
+    if isinstance(v, str) and re.fullmatch(r"[\x20-\x7e]{1,32}", v):
+        return v
+    return "unknown"
+
+
+def version_gate(allow_drift, readonly):
+    """Runtime version gate (v0.5.0 policy).
+
+    same → silent pass. newer / unknown (unparseable) → warn and run.
+    older → mutating modes refuse (--allow-version-drift downgrades the refusal to a warning).
+    Read-only modes (--list / --inspect / --print-prompt) warn and run even on older servers
+    (so the re-verification ritual is not blocked). Warnings go to stderr (stdout stays clean
+    for --print-prompt).
+    """
     info = api("GET", "/api/info")
     version = (info or {}).get("version")
-    if version != PINNED_VERSION:
-        msg = f"server version {version} differs from the verified {PINNED_VERSION}"
-        if not allow_drift:
-            raise SystemExit(f"[version gate] {msg}. --allow-version-drift bypasses it (at your own risk).")
-        print(f"[warning] {msg}", file=sys.stderr)
+    verdict = compare_versions(version, PINNED_VERSION)
+    if verdict == "same":
+        return
+    msg = f"server version {display_version(version)} differs from the verified {PINNED_VERSION} (verdict {verdict})"
+    if verdict == "older" and not allow_drift and not readonly:
+        raise SystemExit(
+            f"[version gate] {msg}. Refusing to run on a server older than the verified version. "
+            "--allow-version-drift bypasses it (at your own risk)."
+        )
+    print(f"[warning] {msg}", file=sys.stderr)
 
 
 def has_pending_question(messages):
@@ -178,7 +207,8 @@ def main():
                     help="declare the session as disposable (required with --measure-boundary)")
     ap.add_argument("--commit", action="store_true", help="delete from the boundary on (irreversible; --reprompt required)")
     ap.add_argument("--reprompt", action="store_true", help="after commit, re-send the instruction (work mode) or the previous user message (question mode)")
-    ap.add_argument("--allow-version-drift", action="store_true", help="let the version gate pass with only a warning")
+    ap.add_argument("--allow-version-drift", action="store_true",
+                    help="run even on a server older than the verified version (newer and unparseable versions run with a warning by default)")
     args = ap.parse_args()
 
     # Combining read-only flags with mutating flags is refused so a "read" never mutates by accident.
@@ -194,7 +224,7 @@ def main():
     if args.disposable and not args.measure_boundary:
         raise SystemExit("--disposable must be combined with --measure-boundary.")
 
-    version_gate(args.allow_version_drift)
+    version_gate(args.allow_version_drift, readonly)
 
     if args.list:
         for s in api("GET", "/api/session") or []:

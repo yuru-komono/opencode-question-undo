@@ -8,7 +8,7 @@ On all three surfaces (Desktop, Web UI, TUI) the same three commands are availab
 
 ## Why
 
-You want to undo the answer to a `question` and have the same question asked again. OpenCode v2.3.2 has no undo for question answers, and the upstream issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) is still open — re-answering questions was explicitly deferred upstream to a separate later issue. This tool only triggers the existing revert (stage/commit) machinery at the question boundary; everything after that (re-running, clearing) uses each surface's standard operations.
+You want to undo the answer to a `question` and have the same question asked again. OpenCode v2.3.2 has no undo for question answers, and the upstream issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) was still open as of 2026-11-23 — re-answering questions was explicitly deferred upstream to a separate later issue. This tool only triggers the existing revert (stage/commit) machinery at the question boundary; everything after that (re-running, clearing) uses each surface's standard operations.
 
 The target scenario: after moving past the confirmation step into implementation, you want to redo from that confirmation. Only the later work is discarded; the asking step's text and the question itself survive.
 
@@ -67,7 +67,7 @@ python tools/smoke.py --session <sid> --clear                      # clear the s
 
 ## Limitations and assumptions
 
-- **Version gate — OpenCode 2.3.2 only.** The server version is checked at run time and execution is refused on mismatch (`smoke.py` can bypass with `--allow-version-drift` at your own risk). Re-verify after any OpenCode update.
+- **Version gate (v0.5.0 policy).** At run time the server version is compared with the verified 2.3.2: **newer versions and unparseable forms (suffixes, dev builds, ...) warn and run; older versions are refused.** The CLI's read-only modes (`--list` / `--inspect` / `--print-prompt`) run with a warning even on older servers, and `--allow-version-drift` is the escape hatch for running on an older one. The plugin-side warning goes only to the server log (the three surfaces have no non-blocking warning channel). The `engines: 2.3.2` field in `package.json` records the verified version, not an accepted range. Re-verify after any OpenCode update.
 - **Measured on Windows only.** All measurements were made on Windows 11 with the Desktop/Web/TUI surfaces of OpenCode 2.3.2. The POSIX side (Linux/macOS) is untested; the CLI bridge there resolves `opencode` via `shutil.which` and should work, but nothing is verified.
 - **Message granularity.** The deletion boundary is per assistant message; every step from the boundary on disappears. If the question tool is called in a dedicated step with no body text (recommended convention, see below), message granularity becomes effectively part granularity.
 - **Re-presentation depends on the model.** The instruction carries the question text, options and multiple values verbatim, but the model itself re-runs the call. In measurements on disposable sessions, the re-presented question matched the payload JSON exactly.
@@ -84,7 +84,7 @@ python tools/smoke.py --session <sid> --clear                      # clear the s
 - "A revert is already staged at another boundary": clear first with `/undo-answer-cancel` (or `--clear`).
 - "The staged boundary changed between two reads": another surface staged concurrently. Check the timeline, clear if needed, then re-run.
 - "No work message after the answered question": the follow-up work has not started. To redo the question itself, use the CLI's `--mode question`.
-- Version mismatch message: this tool is verified on v2.3.2. After an update, re-check boundary behavior with `smoke.py --inspect` before trusting it.
+- Version mismatch message: this tool is verified on v2.3.2. On an older server all three surfaces refuse with a message (to run anyway, use the CLI's `--allow-version-drift`). On a newer server it runs with a warning that appears only in the server/sidecar log, never in the UI. After an update, re-check boundary behavior with `smoke.py --list` / `--inspect` before trusting it.
 
 ## Removal once upstream implements #8689
 

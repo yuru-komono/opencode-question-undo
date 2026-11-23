@@ -8,7 +8,7 @@ OpenCode (v2.3.2 実測) の `question` ツール回答だけをやり直すツ�
 
 ## 目的
 
-`question` の選択肢回答を取り消して、同じ質問をもう一度出したい。OpenCode v2.3.2 には question 回答用の undo が無く、上流 issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) も未実装（question の再回答は別 issue に分離して後回しと明記されている）。このツールは revert（stage/commit）を question 境界で発動するだけで、その後の再実行・解除は各面の標準操作そのままに行える。
+`question` の選択肢回答を取り消して、同じ質問をもう一度出したい。OpenCode v2.3.2 には question 回答用の undo が無く、上流 issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) も未実装（2026-11-23 時点で open 確認済み。question の再回答は別 issue に分離して後回しと明記されている）。このツールは revert（stage/commit）を question 境界で発動するだけで、その後の再実行・解除は各面の標準操作そのままに行える。
 
 確認提示をまたいで実装まで進んだ後で「あの確認からやり直したい」という場面向け。実装の作業だけを捨て、確認提示の本文と質問文はそのまま残したい。
 
@@ -67,7 +67,7 @@ python tools/smoke.py --session <sid> --clear                      # stage 解�
 
 ## 限界と前提
 
-- **版本門 — OpenCode 2.3.2 のみ**。実行時にサーバー版を確認し、一致しない場合は実行を拒否する（`smoke.py` は `--allow-version-drift` で回避可・自己責任）。OpenCode の更新後は再検証のこと
+- **版本門（v0.5.0 方針）**。実行時にサーバー版を検証済み 2.3.2 と比較し、**新し目と解析不能形（接尾辞・dev ビルド等）は警告して実行、古いは拒否**。CLI の読み取り専用モード（`--list` / `--inspect` / `--print-prompt`）は旧版でも警告して実行し、`--allow-version-drift` は旧版で実行するための脱出口。plugin 側の警告はサーバーログにしか出ない（三面に非遮断の警告チャネルが無い）。`package.json` の `engines: 2.3.2` は実測版の意味で受理範囲ではない。OpenCode の更新後は再検証のこと
 - **Windows のみ実測**。実測はすべて Windows 11 の OpenCode 2.3.2（三面）で実施。POSIX 面（Linux/macOS）は未検証。CLI ブリッジは `shutil.which` で解決するため動く見込みだが、検証済みではない
 - **message 粒度**: 削除境界は assistant メッセージ単位。境界以降の全 step が消える。question ツールを本文なしの専用 step で呼ぶ運用（下記の「推奨規則」）で、実質 part 粒度と等価になる
 - **再提示は model 依存**: 指示文は question の文言・選択肢・multiple を一字一句運ぶが、再実行するのは model 自身。使い捨てセッションでの実測では、指示文送信後の再提示が payload の JSON 一致で True
@@ -84,7 +84,7 @@ python tools/smoke.py --session <sid> --clear                      # stage 解�
 - 「他の境界で staged です」: 先に `/undo-answer-cancel`（または `--clear`）で解除する
 - 「staged 境界が 2 回の読み取りで変化しました」: 他の面が同時に stage した。タイムラインを確認し、必要なら `/undo-answer-cancel` で解除してから再実行
 - 「回答済み question の後に作業 message が無い」: 後続の作業がまだ始まっていない。question そのものからやり直すなら CLI の `--mode question`
-- 版本不一致の案内: 本ツールは v2.3.2 で実測。更新後は `smoke.py --inspect` で境界挙動を再確認してから再検証する
+- 版本不一致の案内: 本ツールは v2.3.2 で実測。サーバーが古ければ三面とも拒否文を出す（実行するには CLI の `--allow-version-drift`）。新し目は警告だけ出して実行するが、警告はサーバー／sidecar ログにのみ出て UI には出ない。更新後は `smoke.py --list` / `--inspect` で境界挙動を再確認してから再検証する
 
 ## 上流 #8689 実装時の削除
 

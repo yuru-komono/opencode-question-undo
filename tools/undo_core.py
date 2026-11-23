@@ -1,8 +1,9 @@
 """undo_core.py — pure logic for redoing an answered question (mirror of `src/undo-kernel.js`).
 
-A pure-function module holding only the two decisions: boundary selection (which messageID to
-stage) and instruction generation (what to write as the re-prompt). No API calls, no SDK
-dependency (HTTP lives in `smoke.py`; server-side operations live in `src/undo-server.js`).
+A pure-function module holding three decisions: boundary selection (which messageID to
+stage), instruction generation (what to write as the re-prompt) and the version verdict
+(the runtime version gate). No API calls, no SDK dependency (HTTP lives in `smoke.py`;
+server-side operations live in `src/undo-server.js`).
 
 The instruction frame must match the `INSTR-BEGIN` / `INSTR-END` block in `src/undo-kernel.js`
 verbatim; `tools/check_instruction_parity.py` machine-checks the drift (the dual implementation
@@ -322,3 +323,38 @@ def render_inspect_table(messages, question_message, boundary, outcome):
         lines.append(f"  {m.get('id')}  {m.get('type')}  {part_kinds(m)}{mark}")
     lines.append(describe_boundary(boundary, outcome))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Version-gate comparison (v0.5.0). Mirror of VERSION_RE / compareVersions in
+# `src/undo-kernel.js`. Same four verdict tokens ("same" | "newer" | "older" |
+# "unknown"; parity check #12 verifies them). "newer" means the server is ahead of
+# the pin. Unparseable forms (suffixes, dev builds, non-strings) are "unknown".
+# Strict x.y.z parse (1-9 digits per segment; no lenient suffix stripping).
+# (?a) forces ASCII \d and fullmatch removes the trailing-newline leniency of $:
+# without them the CLI and the plugin flip verdicts on inputs like "2.3.1\n" or
+# Unicode digits (JS \d is ASCII-only and $ anchors at the absolute end). Parity
+# check #11 verifies the (?a) prefix.
+# ---------------------------------------------------------------------------
+VERSION_RE = re.compile(r"(?a)^\d{1,9}\.\d{1,9}\.\d{1,9}$")
+
+
+def parse_version(v):
+    """Strict x.y.z → [major, minor, patch]; anything else (non-strings included) is None."""
+    if not isinstance(v, str) or not VERSION_RE.fullmatch(v):
+        return None
+    return [int(seg) for seg in v.split(".")]
+
+
+def compare_versions(found, pinned):
+    """compare_versions(found, pinned) → "same" | "newer" | "older" | "unknown".
+
+    Numeric segment comparison (the string-comparison trap: "2.10.0" < "2.3.2" is wrong).
+    """
+    a = parse_version(found)
+    b = parse_version(pinned)
+    if a is None or b is None:
+        return "unknown"
+    if a == b:
+        return "same"
+    return "newer" if a > b else "older"

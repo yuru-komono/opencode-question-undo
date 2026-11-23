@@ -1,4 +1,4 @@
-// undo-kernel.js — pure module for boundary selection and instruction generation only.
+// undo-kernel.js — shared pure module for boundary selection, instruction generation and version verdicts.
 //
 // Mirrors the same rules as tools/undo_core.py. The instruction frame (between INSTR-BEGIN /
 // INSTR-END) is machine-checked for verbatim agreement with the Python side by
@@ -216,4 +216,33 @@ export function buildInstruction(payload) {
     throw new PayloadTooLarge(`instruction over cap (${charLen(text)} > ${MAX_INSTRUCTION_CHARS} chars)`);
   }
   return text;
+}
+
+// ---------------------------------------------------------------------------
+// Version-gate comparison (v0.5.0). The runtime version-gate verdict is one of four
+// tokens ("same" | "newer" | "older" | "unknown"; parity check #12 verifies the
+// vocabulary). "newer" means the server is ahead of the pin. Unparseable forms
+// (suffixes, dev builds, non-strings) are "unknown", and callers treat that as
+// "probably newer": warn and run.
+// Strict x.y.z parse (1-9 digits per segment; the digit bound prevents pathological
+// numeric cost/precision input; lenient suffix stripping would create a second,
+// undocumented comparison path).
+// ---------------------------------------------------------------------------
+export const VERSION_RE = /^\d{1,9}\.\d{1,9}\.\d{1,9}$/;
+
+export function parseVersion(v) {
+  if (typeof v !== "string" || !VERSION_RE.test(v)) return null;
+  return v.split(".").map((s) => Number.parseInt(s, 10));
+}
+
+// compareVersions(found, pinned) → "same" | "newer" | "older" | "unknown".
+// Numeric segment comparison (the string-comparison trap: "2.10.0" < "2.3.2" is wrong).
+export function compareVersions(found, pinned) {
+  const a = parseVersion(found);
+  const b = parseVersion(pinned);
+  if (a === null || b === null) return "unknown";
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] < b[i] ? "older" : "newer";
+  }
+  return "same";
 }

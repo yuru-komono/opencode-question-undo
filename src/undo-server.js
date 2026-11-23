@@ -32,12 +32,15 @@ import {
   PayloadTooLarge,
   buildInstruction,
   compareMessages,
+  compareVersions,
   computeWorkBoundary,
   extractPayload,
   tailOutcome,
 } from "./undo-kernel.js";
 
 // Server version gate. Verified only on this value (v2.3.2).
+// Gate policy (v0.5.0): newer and unparseable versions warn and run; older is refused.
+// The engines "2.3.2" in package.json records the verified version, not an accepted range (see README).
 const PINNED_VERSION = "2.3.2";
 
 // Boundary mode. afterQuestionStep is measured on v2.3.2. If an upstream update breaks the
@@ -79,7 +82,11 @@ const TEXT = {
   applyDescription: "send the stored re-prompt instruction for the staged revert (sending commits the stage)",
   cancelDescription: "clear the staged revert and drop the record (only valid before a new send)",
   versionMismatch: (found) =>
-    `The server version is ${found}, which differs from the verified ${PINNED_VERSION}. Refusing to run.`,
+    `The server version is ${found}, older than the verified ${PINNED_VERSION}. Refusing to run. ` +
+    "To run on an older server anyway, use tools/smoke.py with --allow-version-drift (CLI only, at your own risk).",
+  versionDrift: (found, verdict) =>
+    `question-undo: the server version is ${found} (verified: ${PINNED_VERSION}; verdict ${verdict}). ` +
+    "Continuing with a warning only: behavior is guaranteed only on the verified version.",
   cliMissing: "The server process cannot resolve the opencode CLI. Check PATH or set the QUESTION_UNDO_CLI environment variable.",
   badSessionID: "Malformed session ID. Aborting.",
   listFailed: (msg) => `Failed to list messages: ${msg}`,
@@ -321,8 +328,21 @@ function lastUserTextBefore(messages, boundaryMessage) {
     .trim();
 }
 
+// The version string is externally supplied (SDK / API) and reaches the server log and the
+// 500 message. To keep newlines or ANSI from forging log lines, display it only when it is
+// printable ASCII ≤32 chars; anything else displays as "unknown" (the verdict itself is
+// handled as unknown by compareVersions). Mirror: the display_version regex in tools/smoke.py
+// — a hand-mirrored pair; update both sides together.
+const DISPLAY_VERSION_RE = /^[\x20-\x7e]{1,32}$/;
+const displayVersion = (v) => (typeof v === "string" && DISPLAY_VERSION_RE.test(v) ? v : "unknown");
+
+// Version gate (v0.5.0): only "older" throws (surfaced as HTTP 500 on all three surfaces).
+// "newer" / "unknown" warn via console.error and continue (the server ctx has no non-blocking
+// user-facing channel; see README limitations). The warning is evaluated per execution, never cached.
 function gate(ctx) {
-  if (ctx.app.version !== PINNED_VERSION) throw new Error(TEXT.versionMismatch(ctx.app.version));
+  const verdict = compareVersions(ctx.app.version, PINNED_VERSION);
+  if (verdict === "older") throw new Error(TEXT.versionMismatch(displayVersion(ctx.app.version)));
+  if (verdict !== "same") console.error(TEXT.versionDrift(displayVersion(ctx.app.version), verdict));
 }
 
 function checkSessionID(sessionID) {
