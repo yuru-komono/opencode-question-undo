@@ -1,0 +1,20 @@
+{
+  "name": "question-undo",
+  "version": "0.4.0",
+  "description": "OpenCode plugin that redoes only the latest answered question (three surfaces, two-stage stage/apply, server-side commands)",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "exports": {
+    ".": "./src/undo-server.js"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.3.2"
+  },
+  "engines": {
+    "opencode": "2.3.2"
+  }
+}

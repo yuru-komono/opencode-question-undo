@@ -1,0 +1,185 @@
+// undo-kernel.test.js — unit tests for the pure logic (node:test, zero added dependencies).
+// The boundary rules, fork ordering, sentinel escape and cap gates are hand-mirrored between the
+// JS and Python sides, so the same fixtures live in tests/test_undo_core.py (update both when a
+// rule changes).
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  ADMIN_TYPES,
+  MAX_INSTRUCTION_CHARS,
+  MAX_OPTIONS_PER_QUESTION,
+  MAX_QUESTIONS_PER_PART,
+  MAX_STRING_CHARS,
+  PayloadTooLarge,
+  buildInstruction,
+  compareMessages,
+  computeWorkBoundary,
+  escapeSentinels,
+  extractPayload,
+  tailOutcome,
+} from "../src/undo-kernel.js";
+
+const msg = (id, type, created, extra = {}) => ({ id, type, time: { created }, content: [], ...extra });
+
+test("compareMessages: time.created is the primary key (the measured fork shape breaks lexicographic order)", () => {
+  const a = msg("msg_A_544", "assistant", 100);
+  const b = msg("msg_A_58", "assistant", 200);
+  // Lexicographically "_544" < "_58", but chronologically b is later (measured on v0.2.0).
+  assert.ok(compareMessages(a, b) < 0);
+  assert.ok(compareMessages(b, a) > 0);
+  assert.equal(compareMessages(a, a), 0);
+});
+
+test("compareMessages: same created compares same-base suffixes numerically", () => {
+  const a = msg("msg_A_58", "assistant", 100);
+  const b = msg("msg_A_544", "assistant", 100);
+  assert.ok(compareMessages(a, b) < 0); // 58 < 544 numerically (lexicographic order would flip it)
+  const c = msg("msg_B_1", "assistant", 100);
+  assert.ok(compareMessages(a, c) < 0); // different bases compare lexicographically
+});
+
+test("computeWorkBoundary: the work message right after becomes the boundary (raw-successor, independent of list order)", () => {
+  const q = msg("q", "assistant", 100);
+  const w = msg("w", "assistant", 200);
+  const r = computeWorkBoundary([w, q], q); // deliberately reversed order
+  assert.equal(r.ok, true);
+  assert.equal(r.message.id, "w");
+  assert.equal(r.rule, "raw-successor");
+});
+
+test("computeWorkBoundary: an idle right after skips to the first work (skip-idle-to-first-work)", () => {
+  const q = msg("q", "assistant", 100);
+  const idle = msg("i", "idle", 150, { outcome: "succeeded" });
+  const w = msg("w", "assistant", 200);
+  const r = computeWorkBoundary([q, idle, w], q);
+  assert.equal(r.ok, true);
+  assert.equal(r.message.id, "w");
+  assert.equal(r.rule, "skip-idle-to-first-work");
+});
+
+test("computeWorkBoundary: non-idle admin types are never the boundary (regression for review finding M1)", () => {
+  const q = msg("q", "assistant", 100);
+  const comp = msg("c", "compaction", 150);
+  const shell = msg("s", "shell", 160);
+  const w = msg("w", "assistant", 200);
+  const r = computeWorkBoundary([q, comp, shell, w], q);
+  assert.equal(r.message.id, "w");
+  assert.equal(r.rule, "skip-idle-to-first-work");
+});
+
+test("computeWorkBoundary: no successor is no-work, admin-only tail is admin-only", () => {
+  const q = msg("q", "assistant", 100);
+  assert.deepEqual(computeWorkBoundary([q], q), { ok: false, reason: "no-work" });
+  const idle = msg("i", "idle", 150, { outcome: "succeeded" });
+  const syn = msg("s", "synthetic", 160);
+  const r = computeWorkBoundary([q, idle, syn], q);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "admin-only");
+});
+
+test("tailOutcome: returns the outcome of a tail idle message, otherwise null", () => {
+  const q = msg("q", "assistant", 100);
+  const w = msg("w", "assistant", 200);
+  const idle = msg("i", "idle", 300, { outcome: "interrupted" });
+  assert.equal(tailOutcome([q, w, idle], q), "interrupted");
+  assert.equal(tailOutcome([q, w], q), null);
+  assert.equal(tailOutcome([q], q), null);
+});
+
+test("escapeSentinels: inserts U+200B into the closing sentinel and catches case variants", () => {
+  const out = escapeSentinels("x [q_undo-end-payload] y");
+  assert.ok(out.includes("q_undo\u200b-end-payload"));
+  assert.equal(/q_undo-end-payload/i.test(out), false);
+  const upper = escapeSentinels("[Q_UNDO-BEGIN-PAYLOAD]");
+  assert.ok(upper.includes("Q_UNDO\u200b-BEGIN-PAYLOAD")); // original case is kept; ZWSP lands at the q_undo-length offset
+});
+
+test("escapeSentinels: a length-changing character before the token does not shift the cut (regression for review finding L3)", () => {
+  const out = escapeSentinels("İ[q_undo-begin-payload]");
+  assert.ok(out.includes("İ[q_undo\u200b-begin-payload]"));
+});
+
+test("escapeSentinels: neutralizes every occurrence", () => {
+  const out = escapeSentinels("[q_undo-begin-payload]..[q_undo-begin-payload]");
+  assert.equal((out.match(/q_undo-begin-payload/gi) || []).length, 0);
+});
+
+test("escapeSentinels: 8 consecutive occurrences all get the ZWSP at the right offset (regression for review finding H1, pinning the JS side)", () => {
+  const out = escapeSentinels("[q_undo-end-payload]".repeat(8));
+  assert.equal((out.match(/q_undo-end-payload/gi) || []).length, 0);
+  assert.equal(out.split("q_undo\u200b-end-payload").length - 1, 8);
+});
+
+const questionPart = (n) => ({
+  type: "tool",
+  name: "question",
+  state: {
+    status: "completed",
+    input: {
+      questions: Array.from({ length: n }, (_, i) => ({
+        question: `q${i}`,
+        header: `h${i}`,
+        multiple: false,
+        options: [{ label: "a", description: "b" }],
+      })),
+    },
+  },
+});
+
+test("extractPayload: carries question/header/multiple/options verbatim (missing fields become empty)", () => {
+  const part = {
+    type: "tool",
+    name: "question",
+    state: {
+      status: "completed",
+      input: {
+        questions: [
+          { question: "Which one?", header: "Plan", multiple: true, options: [{ label: "A", description: "Plan A" }, { label: "B" }] },
+        ],
+      },
+    },
+  };
+  const [call] = extractPayload([part]);
+  assert.deepEqual(call.questions, [
+    { question: "Which one?", header: "Plan", multiple: true, options: [{ label: "A", description: "Plan A" }, { label: "B", description: "" }] },
+  ]);
+});
+
+test("extractPayload: cap violations raise PayloadTooLarge instead of silent truncation", () => {
+  assert.throws(() => extractPayload([questionPart(MAX_QUESTIONS_PER_PART + 1)]), PayloadTooLarge);
+  const manyOptions = {
+    state: { input: { questions: [{ options: Array.from({ length: MAX_OPTIONS_PER_QUESTION + 1 }, () => ({ label: "x" })) }] } },
+  };
+  assert.throws(() => extractPayload([manyOptions]), PayloadTooLarge);
+  const longStr = { state: { input: { questions: [{ question: "あ".repeat(MAX_STRING_CHARS + 1) }] } } };
+  assert.throws(() => extractPayload([longStr]), PayloadTooLarge);
+  const longOpt = { state: { input: { questions: [{ options: [{ description: "い".repeat(MAX_STRING_CHARS + 1) }] }] } } };
+  assert.throws(() => extractPayload([longOpt]), PayloadTooLarge);
+});
+
+test("buildInstruction: wraps the payload in sentinels and refuses over-cap instructions", () => {
+  const text = buildInstruction(extractPayload([questionPart(1)]));
+  assert.ok(text.includes("[q_undo-begin-payload]"));
+  assert.ok(text.includes("[q_undo-end-payload]"));
+  assert.ok(Array.from(text).length <= MAX_INSTRUCTION_CHARS);
+  const big = [
+    {
+      questions: Array.from({ length: MAX_QUESTIONS_PER_PART }, () => ({
+        question: "う".repeat(MAX_STRING_CHARS),
+        header: "",
+        multiple: false,
+        options: [],
+      })),
+    },
+  ];
+  assert.throws(() => buildInstruction(big), PayloadTooLarge);
+});
+
+test("ADMIN_TYPES: run markers, system injections, compaction and synthetic are not work", () => {
+  for (const t of ["idle", "system", "compaction", "skill", "shell", "synthetic", "agent-switched", "model-switched", "location-switched"]) {
+    assert.ok(ADMIN_TYPES.has(t), `ADMIN_TYPES lacks ${t}`);
+  }
+  assert.equal(ADMIN_TYPES.has("assistant"), false);
+  assert.equal(ADMIN_TYPES.has("user"), false);
+});
