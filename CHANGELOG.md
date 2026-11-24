@@ -4,6 +4,12 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-24
+
+### Changed
+
+- The version shown in the re-presentation instruction now tracks the tool's own version (`[q_undo v0.6.1]`)
+
 ## [0.6.0] - 2026-11-24
 
 ### Added
