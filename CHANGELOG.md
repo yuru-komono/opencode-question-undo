@@ -4,6 +4,19 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-24
+
+### Changed
+
+- OpenCode 2.4.1 measured — the version gate's verified version moves to 2.4.1
+- Upstream issue #8689 — confirmed still unimplemented (open as of 2026-11-24)
+- README — the top warning is now a bullet list of conclusions, with a pointer to the dedicated-question-step requirement (English and Japanese)
+- README — moved the "Requirement" section above "Install" (English and Japanese)
+- README — merged duplicated statements across sections (file rollback, stage reversibility, message granularity, concurrent staging)
+- README — the purpose/method framing now reads: re-answer the question by undoing the work done after it and having the same question output again
+- README — expanded the rationale for why file rollback is not offered (Git-based shadow snapshots, preconditions, exclusions, and the three reasons)
+- README — rewrote the provenance section: the author's personal harness based on feature-dev, the Qwen-family model running locally on Strata, and the author/AI double-check loop (English and Japanese)
+
 ## [0.5.2] - 2026-11-23
 
 ### Changed

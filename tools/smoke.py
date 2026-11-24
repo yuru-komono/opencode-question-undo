@@ -77,7 +77,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-PINNED_VERSION = "2.4.0"
+PINNED_VERSION = "2.4.1"
 SID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # message.list default page is the newest 50 (measured on v2.3.2). limit=1000 returns HTTP 400, so use 200.
 MSG_QUERY = "?limit=200"

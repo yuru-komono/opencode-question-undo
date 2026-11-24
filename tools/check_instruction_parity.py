@@ -14,8 +14,10 @@ Checks:
 5. The runtime value of `ZERO_WIDTH_SPACE` matches (the JS side is decoded from its escape
    notation. Past measured drift: a double-escaped `"\\u200b"` left 6 characters of garbage).
 6. The payload-block structural strings (field line heads with indentation) are the same on both sides.
-7. The version pin agrees in 3 places (`src/undo-server.js`, `tools/smoke.py`, and the
-   `engines` field of `package.json`) so the version gate cannot be looser in one place.
+7. The version pin agrees in 4 places (`src/undo-server.js`, `tools/smoke.py`, the
+   `engines` field and the `@opencode/plugin` dependency of `package.json`) so the
+   version gate cannot be looser in one place and the dependency cannot silently
+   stay on an older version.
 8. The `ADMIN_TYPES` set agrees (read from the JS `new Set([...])` literal and the Python
    runtime value. This hand-mirrored admin-type set silently shifts boundary computation if it drifts).
 9. The boundary rule-name vocabulary (`raw-successor` / `skip-idle-to-first-work` / `no-work` /
@@ -103,7 +105,7 @@ def js_int_const(text, name):
 
 
 def pinned_versions():
-    """Read the version pin from 3 places (server part, CLI, engines). Unreadable places are None."""
+    """Read the version pin from 4 places (server part, CLI, engines, @opencode/plugin dependency). Unreadable places are None."""
     out = {}
     for label, file, pattern in (
         ("src/undo-server.js", SERVER_JS, r'const PINNED_VERSION = "([^"]+)"'),
@@ -115,9 +117,14 @@ def pinned_versions():
         except OSError:
             out[label] = None
     try:
-        out["package.json"] = (json.loads(PKG_JSON.read_text(encoding="utf-8")).get("engines") or {}).get("opencode")
-    except (OSError, ValueError):
+        pkg = json.loads(PKG_JSON.read_text(encoding="utf-8"))
+        out["package.json"] = (pkg.get("engines") or {}).get("opencode")
+        # The gate runs on the pin even when engines and the dependency disagree, so bind the
+        # dependency's real version with the same gate (v0.5.3).
+        out["package.json dependencies[@opencode/plugin]"] = (pkg.get("dependencies") or {}).get("@opencode/plugin")
+    except (OSError, ValueError, AttributeError):
         out["package.json"] = None
+        out["package.json dependencies[@opencode/plugin]"] = None
     return out
 
 
