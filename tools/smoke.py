@@ -42,6 +42,7 @@ Usage:
   python tools/smoke.py --session <sid> --clear              # clear the staged revert
   python tools/smoke.py --session <sid> --mode work --apply  # send the instruction (/undo-answer-apply equivalent)
   python tools/smoke.py --session <sid> --mode work --commit --reprompt   # delete then re-send (irreversible)
+  python tools/smoke.py --session <sid> --files                # stage with file rollback enabled (files:true)
 
 Version gate (v0.5.0): a server newer than the verified PINNED_VERSION, or an unparseable
 version, warns and runs; an older server is refused. Read-only modes run with a warning even
@@ -52,6 +53,7 @@ the explicit escape hatch for older servers.
 import argparse
 import re
 import sys
+from pathlib import Path
 
 from fetch_api import ApiError, api
 from undo_core import (
@@ -65,6 +67,7 @@ from undo_core import (
     find_latest_question,
     last_user_text_before,
     render_inspect_table,
+    resolve_files_mode,
     tail_outcome,
 )
 
@@ -81,6 +84,12 @@ PINNED_VERSION = "2.4.1"
 SID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # message.list default page is the newest 50 (measured on v2.3.2). limit=1000 returns HTTP 400, so use 200.
 MSG_QUERY = "?limit=200"
+
+# Default effective mode for file rollback (files:true). Hand-mirrored with FILES_MODE in
+# src/undo-server.js (default OFF). The effective value is resolve_files_mode(--files flag,
+# marker in the process cwd, this constant); the three surfaces consult only the marker and the constant.
+FILES_MODE = False
+FILES_MARKER = "undo-files.on"
 
 
 def fetch_messages(sid):
@@ -99,7 +108,7 @@ def display_version(v):
     return "unknown"
 
 
-def version_gate(allow_drift, readonly):
+def version_gate(allow_drift, readonly, files=False):
     """Runtime version gate (v0.5.0 policy).
 
     same → silent pass. newer / unknown (unparseable) → warn and run.
@@ -107,6 +116,8 @@ def version_gate(allow_drift, readonly):
     Read-only modes (--list / --inspect / --print-prompt) warn and run even on older servers
     (so the re-verification ritual is not blocked). Warnings go to stderr (stdout stays clean
     for --print-prompt).
+    With files enabled on an unverified version (newer / unknown) it also warns that the meaning
+    of revert.files may change upstream (issue #15391).
     """
     info = api("GET", "/api/info")
     version = (info or {}).get("version")
@@ -120,6 +131,12 @@ def version_gate(allow_drift, readonly):
             "--allow-version-drift bypasses it (at your own risk)."
         )
     print(f"[warning] {msg}", file=sys.stderr)
+    if files and not readonly:
+        print(
+            f"[warning] file rollback (files:true) is measured on the verified {PINNED_VERSION}. "
+            f"Server {display_version(version)} is unverified, and how revert.files is stored and restored may change in the future (upstream #15391).",
+            file=sys.stderr,
+        )
 
 
 def has_pending_question(messages):
@@ -149,7 +166,7 @@ def message_ids(sid):
     return {str(m.get("id")) for m in (fetch_messages(sid) or []) if m}
 
 
-def measure_boundary(sid, boundary):
+def measure_boundary(sid, boundary, files=False):
     """Measure the boundary's reality with reversible steps only (stage -> observe -> clear). No commit.
 
     The hard checks are `session.revert.messageID` and the revert disappearing after clear.
@@ -162,7 +179,7 @@ def measure_boundary(sid, boundary):
     if staged.get("messageID"):
         print(f"[measurement aborted] a revert is staged at another boundary: {staged.get('messageID')}. Run --clear first.", file=sys.stderr)
         return 2
-    api("POST", f"/api/session/{sid}/revert/stage", {"messageID": boundary, "files": False})
+    api("POST", f"/api/session/{sid}/revert/stage", {"messageID": boundary, "files": files})
     revert = (api("GET", f"/api/session/{sid}") or {}).get("revert") or {}
     failed = []
     if revert.get("messageID") != boundary:
@@ -218,6 +235,8 @@ def main():
     ap.add_argument("--reprompt", action="store_true", help="after commit, re-send the instruction (work mode) or the previous user message (question mode)")
     ap.add_argument("--allow-version-drift", action="store_true",
                     help="run even on a server older than the verified version (newer and unparseable versions run with a warning by default)")
+    ap.add_argument("--files", action="store_true",
+                    help="enable file rollback (files:true; files the work after the boundary touched are returned to the boundary point; hand edits or other sessions' changes made after the question are lost)")
     args = ap.parse_args()
 
     # Combining read-only flags with mutating flags is refused so a "read" never mutates by accident.
@@ -233,7 +252,11 @@ def main():
     if args.disposable and not args.measure_boundary:
         raise SystemExit("--disposable must be combined with --measure-boundary.")
 
-    version_gate(args.allow_version_drift, readonly)
+    files = resolve_files_mode(args.files, (Path.cwd() / FILES_MARKER).exists(), FILES_MODE)
+    # The #15391 warning is printed only on the paths that actually stage (default stage / commit /
+    # measure-boundary). --clear and --apply do not stage, so files is not passed to version_gate
+    # there (on the surfaces side only undoAnswer enables files).
+    version_gate(args.allow_version_drift, readonly, files and not args.clear and not args.apply)
 
     if args.list:
         for s in api("GET", "/api/session") or []:
@@ -344,7 +367,7 @@ def main():
         if args.mode != "work":
             print("--measure-boundary measures the --mode work boundary.", file=sys.stderr)
             return 2
-        return measure_boundary(sid, boundary)
+        return measure_boundary(sid, boundary, files)
 
     try:
         instruction = build_instruction(extract_payload(found["parts"])) if args.mode == "work" else ""
@@ -372,12 +395,12 @@ def main():
         # different boundary is staged would delete beyond the verified range, so re-stage and match.
         staged = (api("GET", f"/api/session/{sid}") or {}).get("revert") or {}
         if staged.get("messageID") != boundary:
-            api("POST", f"/api/session/{sid}/revert/stage", {"messageID": boundary, "files": False})
+            api("POST", f"/api/session/{sid}/revert/stage", {"messageID": boundary, "files": files})
             staged = (api("GET", f"/api/session/{sid}") or {}).get("revert") or {}
         if staged.get("messageID") != boundary:
             raise SystemExit("failed to stage at the detected boundary. Aborting the commit.")
         api("POST", f"/api/session/{sid}/revert/commit", {"sessionID": sid})
-        print("Committed (deleted from the boundary on).")
+        print("Committed (deleted from the boundary on)." + (" File rollback: ON (files the work touched were also returned to the boundary point)." if files else ""))
         # After a commit there is no undo. If the re-send fails, print the body for manual sending.
         try:
             api("POST", f"/api/session/{sid}/prompt", {"text": body})
@@ -398,7 +421,7 @@ def main():
     if staged_now.get("messageID"):
         raise SystemExit("a revert is staged at another boundary. Clear it first with --clear (or /undo-answer-cancel in the GUI).")
     try:
-        api("POST", f"/api/session/{sid}/revert/stage", {"messageID": boundary, "files": False})
+        api("POST", f"/api/session/{sid}/revert/stage", {"messageID": boundary, "files": files})
     except ApiError as e:
         # Staging a running session surfaces as HTTP 409 (measured on v2.3.2). The GUI side sees SessionBusy.
         text = (e.stderr or "") + (e.stdout or "")
@@ -412,6 +435,13 @@ def main():
         print(f"[warning] could not confirm the stage (revert={staged})", file=sys.stderr)
         return 2
     print(describe_boundary(boundary_info, outcome))
+    if files:
+        if staged.get("files"):
+            print("File rollback: ON (files the work after the boundary touched are returned to the boundary point; hand edits or other sessions' changes made after the question are lost).")
+        else:
+            print("File rollback: ON but there is nothing to restore (not a Git repository, or the snapshot capture failed). Files are unchanged.")
+    else:
+        print("File rollback: OFF (files are unchanged; enable it with --files or an undo-files.on file in the project root).")
     if args.mode == "work":
         print("Staged. To re-present: `python tools/smoke.py --session <sid> --mode work --apply`, "
               "or /undo-answer-apply in the session (all three surfaces). To only fetch the instruction: --print-prompt (read-only).")

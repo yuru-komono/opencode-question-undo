@@ -4,6 +4,20 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+### Added
+
+- Opt-in file rollback (default OFF) — when enabled, the files touched by the work after the question are returned to the boundary point (hand edits or other sessions' changes made after the question are lost)
+- CLI `--files` flag and the `undo-files.on` enable marker (consulted by both the three surfaces and the CLI; precedence: CLI flag > marker > constant)
+- When staging with file rollback enabled, a "nothing to restore" notice if the project is not a Git repository or the snapshot capture failed
+- On cancel with file rollback enabled, a notice that file changes made while staged are not returned
+- A warning that the meaning of file rollback may change upstream when it is enabled on an unverified server (#15391)
+
+### Changed
+
+- README — file rollback reworded from "not offered" to "opt-in (default OFF)", with how to enable it and the risk (English and Japanese)
+
 ## [0.5.3] - 2026-11-24
 
 ### Changed

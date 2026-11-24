@@ -18,6 +18,7 @@ import {
   computeWorkBoundary,
   escapeSentinels,
   extractPayload,
+  resolveFilesMode,
   tailOutcome,
 } from "../src/undo-kernel.js";
 
@@ -201,4 +202,17 @@ test("compareVersions: unparseable forms are unknown (suffixes, dev builds, empt
   }
   // a malformed pin side is unknown too (the parity gate #7 shape guard prevents it upstream)
   assert.equal(compareVersions("2.3.2", "2.3"), "unknown");
+});
+
+test("resolveFilesMode: precedence truth table (flag > marker > constant)", () => {
+  // All three inputs are "enable" signals: any true gives true, only all false gives false.
+  assert.equal(resolveFilesMode(true, false, false), true);
+  assert.equal(resolveFilesMode(false, true, false), true);
+  assert.equal(resolveFilesMode(false, false, true), true);
+  assert.equal(resolveFilesMode(true, true, true), true);
+  assert.equal(resolveFilesMode(false, false, false), false);
+  // non-bool input is normalized by Boolean() (undefined / 0 / "" count as false).
+  assert.equal(resolveFilesMode(undefined, undefined, undefined), false);
+  assert.equal(resolveFilesMode(undefined, true, undefined), true);
+  assert.equal(resolveFilesMode(0, 0, 1), true);
 });

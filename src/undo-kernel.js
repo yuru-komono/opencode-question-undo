@@ -246,3 +246,16 @@ export function compareVersions(found, pinned) {
   }
   return "same";
 }
+
+// ---------------------------------------------------------------------------
+// Effective-mode resolution for the file-rollback opt-in (v0.6.0). All three inputs
+// are "enable" signals and precedence is evaluation order (CLI flag > project-root
+// marker > constant). If any of them is true, the stage runs with files:true. The
+// default is the constant false, i.e. OFF (the safe default for all three surfaces).
+// Pure function: the fs existence check and the argparse side are gathered by the
+// callers (undo-server.js / smoke.py). Parity check #13 verifies the marker name, the
+// false default and the `files` stage vocabulary.
+// ---------------------------------------------------------------------------
+export function resolveFilesMode(cliFlag, markerExists, constant) {
+  return Boolean(cliFlag) || Boolean(markerExists) || Boolean(constant);
+}

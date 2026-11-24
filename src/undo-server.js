@@ -36,6 +36,7 @@ import {
   compareVersions,
   computeWorkBoundary,
   extractPayload,
+  resolveFilesMode,
   tailOutcome,
 } from "./undo-kernel.js";
 
@@ -51,6 +52,14 @@ const BOUNDARY_MODE = "afterQuestionStep";
 
 // Unknown values (typos) must not silently fall back to the v0.2.0 boundary, so only these two are allowed.
 const KNOWN_BOUNDARY_MODES = ["afterQuestionStep", "questionStep"];
+
+// Effective mode for file rollback (files:true). Default false = files are not rolled back
+// (the safe default for all three surfaces: Desktop, Web UI, TUI). The effective value is
+// resolveFilesMode(CLI flag, marker existence, this constant); the three surfaces have no CLI
+// flag, so that input is false. A FILES_MARKER file in the project root enables it by existence
+// alone and its contents are never read. Hand-mirrored with FILES_MODE in tools/smoke.py.
+const FILES_MODE = false;
+const FILES_MARKER = "undo-files.on";
 
 // Record key namespace (no collision with other plugins).
 const RECORD_PREFIX = "question-undo/record/";
@@ -89,6 +98,8 @@ const TEXT = {
   versionDrift: (found, verdict) =>
     `question-undo: the server version is ${found} (verified: ${PINNED_VERSION}; verdict ${verdict}). ` +
     "Continuing with a warning only: behavior is guaranteed only on the verified version.",
+  filesSemantics: (found) =>
+    `question-undo: file rollback (files:true) is measured on the verified ${PINNED_VERSION}. Server ${found} is unverified, and how revert.files is stored and restored may change in the future (upstream #15391).`,
   cliMissing: "The server process cannot resolve the opencode CLI. Check PATH or set the QUESTION_UNDO_CLI environment variable.",
   badSessionID: "Malformed session ID. Aborting.",
   listFailed: (msg) => `Failed to list messages: ${msg}`,
@@ -111,15 +122,20 @@ const TEXT = {
   cliPathUnsafe: "The resolved opencode CLI path contains shell metacharacters; refusing to run the bridge.",
   stageVerifyFailedCleared: "Could not confirm the stage. A clear was attempted. Check that the timeline was restored.",
   stageRace: "The staged boundary changed between two reads (another surface may have staged concurrently). Aborting without clearing someone else's stage. Check the timeline and run /undo-answer-cancel if needed.",
-  stageDone: (boundary) =>
+  stageDone: (boundary, filesEnabled) =>
     `question redo: staged (boundary ${boundary}). The later work is hidden. ` +
+    (filesEnabled
+      ? "File rollback: ON (files the work after the boundary touched are returned to the boundary point; hand edits or other sessions' changes made after the question are lost). "
+      : "File rollback: OFF (files are unchanged; enable it with tools/smoke.py --files or an undo-files.on file in the project root). ") +
     `/undo-answer-apply re-presents the same question; /undo-answer-cancel clears (valid only before a new send).`,
+  stageNoFiles: "File rollback is ON but there is nothing to restore (not a Git repository, or the snapshot capture failed). Files are unchanged.",
   foreignStage: "A staged revert exists at a different boundary (it does not match the recorded one). Aborting without replacing it. Run /undo-answer-cancel first.",
   recordGone: "No re-presentation record was found and the same boundary cannot be re-derived from history. Run /undo-answer again.",
   noStagedApply: "This session has neither a staged revert nor a re-presentation record. Run /undo-answer first.",
   clearedNotCommitted: "The stage appears to have been cleared (the boundary message is still in history). The re-prompt will not be sent. To redo, run /undo-answer.",
   applied: "Sent the question re-prompt instruction (the send committed the stage).",
   cancelled: "Cleared the staged revert and dropped the record. The timeline is restored.",
+  cancelledFilesWarn: "Cleared the staged revert and dropped the record. File rollback was ON but no snapshot existed, so file changes made while staged are not returned (only the timeline is restored).",
   noStaged: "This session has no staged revert (the record was dropped too).",
   clearFailed: (msg) => `Failed to clear the revert: ${msg}`,
   applyPromptFailed: (msg) =>
@@ -248,8 +264,8 @@ async function listMessages(location, sessionID) {
   return (d && d.data) || d || [];
 }
 
-async function stageRevert(location, sessionID, messageID) {
-  await apiCall(location, "POST", `/api/session/${sessionID}/revert/stage`, { messageID, files: false });
+async function stageRevert(location, sessionID, messageID, files) {
+  await apiCall(location, "POST", `/api/session/${sessionID}/revert/stage`, { messageID, files });
 }
 
 async function clearRevert(location, sessionID) {
@@ -341,10 +357,16 @@ const displayVersion = (v) => (typeof v === "string" && DISPLAY_VERSION_RE.test(
 // Version gate (v0.5.0): only "older" throws (surfaced as HTTP 500 on all three surfaces).
 // "newer" / "unknown" warn via console.error and continue (the server ctx has no non-blocking
 // user-facing channel; see README limitations). The warning is evaluated per execution, never cached.
-function gate(ctx) {
+function gate(ctx, filesEnabled = false) {
   const verdict = compareVersions(ctx.app.version, PINNED_VERSION);
   if (verdict === "older") throw new Error(TEXT.versionMismatch(displayVersion(ctx.app.version)));
-  if (verdict !== "same") console.error(TEXT.versionDrift(displayVersion(ctx.app.version), verdict));
+  if (verdict !== "same") {
+    console.error(TEXT.versionDrift(displayVersion(ctx.app.version), verdict));
+    // The restore semantics of files:true are measured only on the verified version: on an
+    // unverified server how revert.files is stored and restored may change (upstream #15391).
+    // Warn only on the stage path (undoAnswer) and only when files is enabled.
+    if (filesEnabled) console.error(TEXT.filesSemantics(displayVersion(ctx.app.version)));
+  }
 }
 
 function checkSessionID(sessionID) {
@@ -362,7 +384,8 @@ async function say(ctx, sessionID, text) {
 
 // /undo-answer — compute boundary → stage → save record.
 async function undoAnswer(ctx, sessionID) {
-  gate(ctx);
+  const filesEnabled = resolveFilesMode(false, existsSync(path.join(ctx.location.directory, FILES_MARKER)), FILES_MODE);
+  gate(ctx, filesEnabled);
   checkSessionID(sessionID);
 
   let messages;
@@ -402,7 +425,7 @@ async function undoAnswer(ctx, sessionID) {
     throw new Error(`bridge refused: malformed boundary message id (${boundary.message.id})`);
   }
   try {
-    await stageRevert(ctx.location.directory, sessionID, boundary.message.id);
+    await stageRevert(ctx.location.directory, sessionID, boundary.message.id, filesEnabled);
   } catch (e) {
     const text = e && e.message ? e.message : String(e);
     // Even when the bridge call fails, a stage may have taken effect server-side (a timeout that
@@ -440,6 +463,7 @@ async function undoAnswer(ctx, sessionID) {
       boundaryMessageID: boundary.message.id,
       boundaryRule: boundary.rule,
       mode: BOUNDARY_MODE,
+      files: filesEnabled,
       instruction,
       createdAt: Date.now(),
     });
@@ -450,7 +474,9 @@ async function undoAnswer(ctx, sessionID) {
 
   const outcome = tailOutcome(messages, found.message);
   const tail = { succeeded: "completed", failed: "failed", interrupted: "interrupted" }[outcome] || "running or no end marker";
-  await say(ctx, sessionID, `${TEXT.stageDone(boundary.message.id)} rule ${boundary.rule} · tail run state: ${tail}`);
+  const noFiles = filesEnabled && (!Array.isArray(after.revert.files) || after.revert.files.length === 0);
+  const filesNote = noFiles ? ` ${TEXT.stageNoFiles}` : "";
+  await say(ctx, sessionID, `${TEXT.stageDone(boundary.message.id, filesEnabled)}${filesNote} rule ${boundary.rule} · tail run state: ${tail}`);
 }
 
 // /undo-answer-apply — send the stored instruction (the send commits the stage).
@@ -535,6 +561,13 @@ async function undoCancel(ctx, sessionID) {
   const s = await ctx.session.get({ sessionID }).catch(() => null);
   if (!s) throw new Error(TEXT.sessionGetFailed);
   const hadStage = Boolean(s.revert);
+  // Read the staged files before clearing (no extra API call). If files is enabled but
+  // revert.files is empty, the snapshot capture failed or the project is not a Git repository,
+  // so file changes made while staged will not be returned.
+  const record = hadStage ? await readRecord(ctx, sessionID).catch(() => null) : null;
+  const stagedFiles = s.revert && Array.isArray(s.revert.files) ? s.revert.files : null;
+  const filesStaged = (record && record.files === true) || Boolean(stagedFiles && stagedFiles.length > 0);
+  const captureFailed = filesStaged && (!stagedFiles || stagedFiles.length === 0);
   if (hadStage) {
     try {
       await clearRevert(ctx.location.directory, sessionID);
@@ -545,7 +578,8 @@ async function undoCancel(ctx, sessionID) {
     if (after && after.revert) throw new Error(TEXT.clearFailed("revert still present after clear"));
   }
   await dropRecord(ctx, sessionID);
-  await say(ctx, sessionID, hadStage ? TEXT.cancelled : TEXT.noStaged);
+  const message = !hadStage ? TEXT.noStaged : captureFailed ? TEXT.cancelledFilesWarn : TEXT.cancelled;
+  await say(ctx, sessionID, message);
 }
 
 export default Plugin.define({

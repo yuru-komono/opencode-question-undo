@@ -200,5 +200,23 @@ class TestCompareVersions(unittest.TestCase):
         self.assertEqual(undo_core.compare_versions("2.3.2", "2.3"), "unknown")
 
 
+class TestResolveFilesMode(unittest.TestCase):
+    """Effective file-rollback mode of the opt-in (hand-mirrored table with tests/undo-kernel.test.js)."""
+
+    def test_priority_or_semantics(self):
+        # All three inputs are "enable" signals: any True gives True, only all False gives False.
+        self.assertTrue(undo_core.resolve_files_mode(True, False, False))
+        self.assertTrue(undo_core.resolve_files_mode(False, True, False))
+        self.assertTrue(undo_core.resolve_files_mode(False, False, True))
+        self.assertTrue(undo_core.resolve_files_mode(True, True, True))
+        self.assertFalse(undo_core.resolve_files_mode(False, False, False))
+
+    def test_non_bool_normalized(self):
+        # non-bool values are normalized by bool() (None / 0 / "" count as False).
+        self.assertFalse(undo_core.resolve_files_mode(None, None, None))
+        self.assertTrue(undo_core.resolve_files_mode(None, True, None))
+        self.assertTrue(undo_core.resolve_files_mode(0, 0, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

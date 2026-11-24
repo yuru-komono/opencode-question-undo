@@ -30,6 +30,11 @@ Checks:
 12. The version verdict tokens (`same` / `newer` / `older` / `unknown`) appear as quoted
     literals inside the comparator bodies, and each gate calls its comparator by name (a
     whole-file substring check would pass after a rename because comments carry the vocabulary).
+13. The file-rollback opt-in (v0.6.0): `FILES_MARKER` (the project-root marker name) agrees on both
+    sides, the `FILES_MODE` default is false on both sides (flipping the destructive default is a
+    finding), and the `files` stage-payload vocabulary appears on both sides. `FILES_MODE` is a
+    bool, so the integer-constant reader used by #4 cannot read it; literal substring matching is
+    used instead.
 
 Usage:
     python tools/check_instruction_parity.py
@@ -187,6 +192,32 @@ def comparator_bodies():
     return out
 
 
+def files_marker_values():
+    """Value of `FILES_MARKER` (the project-root marker name) read from the JS and Python sides. Unreadable sides are None."""
+    out = {}
+    try:
+        m = re.search(r'const FILES_MARKER = "([^"]+)"', SERVER_JS.read_text(encoding="utf-8"))
+        out["src/undo-server.js"] = m.group(1) if m else None
+    except OSError:
+        out["src/undo-server.js"] = None
+    try:
+        m = re.search(r'^FILES_MARKER = "([^"]+)"', SMOKE_PY.read_text(encoding="utf-8"), re.MULTILINE)
+        out["tools/smoke.py"] = m.group(1) if m else None
+    except OSError:
+        out["tools/smoke.py"] = None
+    return out
+
+
+def stage_revert_body():
+    """Body of the server-side `stageRevert` function (for the body-scoped files payload-vocabulary check). None if unreadable."""
+    try:
+        m = re.search(r"async function stageRevert\([^)]*\) \{(.*?)\n\}",
+                      SERVER_JS.read_text(encoding="utf-8"), re.DOTALL)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -313,6 +344,34 @@ def main() -> int:
         if needle not in text:
             findings.append(f"gate does not call the comparator: {label}")
 
+    # 13. File-rollback opt-in (v0.6.0): marker name match, false default, stage-payload files
+    #     vocabulary. This guards the destructive default (files:false) and the enable knob against
+    #     drift. The FILES_MODE default is a bool, so the js_int_const reader cannot see it; literal
+    #     substring matching is used (same idiom as #6).
+    markers = files_marker_values()
+    for label, value in markers.items():
+        if value is None:
+            findings.append(f"FILES_MARKER unreadable: {label}")
+    if all(v is not None for v in markers.values()) and len(set(markers.values())) > 1:
+        findings.append("FILES_MARKER differs: " + " / ".join(f"{k}={v!r}" for k, v in markers.items()))
+    if "const FILES_MODE = false;" not in js_server_text:
+        findings.append("no FILES_MODE = false default in the JS server part (prevents flipping the destructive default)")
+    if "FILES_MODE = False" not in py_smoke_text:
+        findings.append("no FILES_MODE = False default in the Python CLI part (prevents flipping the destructive default)")
+    stage_body = stage_revert_body()
+    if stage_body is None:
+        findings.append("stageRevert body not found in the JS server part")
+    elif "files" not in stage_body:
+        findings.append("no files stage-payload vocabulary in the JS stageRevert body")
+    if '"files":' not in py_smoke_text:
+        findings.append("no files stage-payload vocabulary in the Python CLI part")
+    # The call sites must also call the pure resolver (same intent as #12 "the gate calls its
+    # comparator by name"): inlining the logic would leave the pure resolver idle.
+    if "resolveFilesMode(" not in js_server_text:
+        findings.append("the JS server part does not call resolveFilesMode")
+    if "resolve_files_mode(" not in py_smoke_text:
+        findings.append("the Python CLI part does not call resolve_files_mode")
+
     if findings:
         for f in findings:
             print(f"parity: {f}", file=sys.stderr)
@@ -323,7 +382,7 @@ def main() -> int:
         f"parity: OK (instruction {len(INSTRUCTION_FRAME)} lines, 2 sentinels, {len(FIELD_LABELS)} field labels, "
         f"{len(CAP_NAMES)} caps, ZWSP match, {len(STRUCT_STRINGS)} structural strings, version pin {pins.get('tools/smoke.py')} (plain x.y.z), "
         f"{len(undo_core.ADMIN_TYPES)} ADMIN_TYPES words, {len(RULE_NAMES)} rule names, SID_RE match, "
-        f"VERSION_RE match, {len(VERDICT_NAMES)} verdict tokens)"
+        f"VERSION_RE match, {len(VERDICT_NAMES)} verdict tokens, files marker match, false default, stage files vocabulary)"
     )
     return 0
 

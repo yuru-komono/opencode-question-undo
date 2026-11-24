@@ -8,6 +8,7 @@ guard never touches a real server.
 import contextlib
 import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -54,7 +55,7 @@ class TestFlagGuards(unittest.TestCase):
 
 
 class TestDefaultMode(unittest.TestCase):
-    def test_default_stages_work_boundary(self):
+    def _run_stage(self, extra_argv):
         # The default (no --mode) stages the v0.2.0 work boundary (the work message right after
         # the question), not the question message itself.
         q = {
@@ -71,6 +72,7 @@ class TestDefaultMode(unittest.TestCase):
         def fake_api(method, path, data=None, timeout=180):
             if path.endswith("/revert/stage"):
                 staged["messageID"] = data["messageID"]
+                staged["files"] = data.get("files")
                 return {}
             if method == "GET":
                 return {"revert": dict(staged)} if staged else {}
@@ -79,10 +81,22 @@ class TestDefaultMode(unittest.TestCase):
         with mock.patch.object(smoke, "version_gate"), \
              mock.patch.object(smoke, "fetch_messages", return_value=[w, q]), \
              mock.patch.object(smoke, "api", side_effect=fake_api), \
-             mock.patch.object(sys, "argv", ["smoke.py", "--session", "s1"]):
+             mock.patch.object(smoke.Path, "cwd", return_value=Path(tempfile.gettempdir())), \
+             mock.patch.object(sys, "argv", ["smoke.py", "--session", "s1", *extra_argv]):
             rc = smoke.main()
+        return rc, staged
+
+    def test_default_stages_work_boundary(self):
+        rc, staged = self._run_stage([])
         self.assertEqual(rc, 0)
         self.assertEqual(staged.get("messageID"), "w1")  # the work message, not q1, is the boundary
+        self.assertIs(staged.get("files"), False)  # the default is files:false (no file rollback)
+
+    def test_files_flag_sets_stage_payload(self):
+        # --files sets files:true in the stage payload (overriding the default False).
+        rc, staged = self._run_stage(["--files"])
+        self.assertEqual(rc, 0)
+        self.assertIs(staged.get("files"), True)
 
 
 class TestVersionGate(unittest.TestCase):

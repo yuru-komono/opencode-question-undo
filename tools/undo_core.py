@@ -358,3 +358,15 @@ def compare_versions(found, pinned):
     if a == b:
         return "same"
     return "newer" if a > b else "older"
+
+
+# ---------------------------------------------------------------------------
+# Effective-mode resolution for the file-rollback opt-in (v0.6.0). Mirror of
+# resolveFilesMode in `src/undo-kernel.js`. All three inputs are "enable" signals and
+# precedence is evaluation order (CLI flag > project-root marker > constant); any True
+# gives files:true. The default is the constant False, i.e. OFF. The fs existence check
+# and the argparse side are gathered by the caller (smoke.py), so this stays pure.
+# ---------------------------------------------------------------------------
+def resolve_files_mode(cli_flag, marker_exists, constant):
+    """Effective file-rollback mode as a bool (cli_flag or marker_exists or constant)."""
+    return bool(cli_flag) or bool(marker_exists) or bool(constant)

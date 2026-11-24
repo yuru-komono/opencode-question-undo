@@ -3,3 +3,4 @@ dist/
 __pycache__/
 .todo-state.md
 .report-*.md
+/undo-files.on
