@@ -55,7 +55,7 @@ ZERO_WIDTH_SPACE = "\u200b"
 # both sides to the released version together).
 # INSTR-BEGIN
 INSTRUCTION_FRAME = [
-    "[q_undo v0.6.1] Instruction: invalidate the previous question answer and re-present the same question",
+    "[q_undo v0.6.2] Instruction: invalidate the previous question answer and re-present the same question",
     "",
     "1. The question tool call in the previous assistant step and all of its selection results are void. Do not build on that selection.",
     "2. Re-run exactly the question tool call shown in the payload below. Keep the question text, the header, every option's label and description, and the multiple value verbatim, including counts and order.",

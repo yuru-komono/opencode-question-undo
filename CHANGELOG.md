@@ -4,6 +4,17 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-24
+
+### Changed
+
+- The version shown in the re-presentation instruction is now `[q_undo v0.6.2]`
+- README — the top warning is narrowed to four bullets, ordered from the general fact to the specific one
+- README — removed statements that were repeated across the introduction, "Why" and the scenario text
+- README — added a "Requirements" table that gathers the OpenCode version, the harness rule, Git, CLI resolution and Node.js/Python in one place (English and Japanese)
+- README — the version gate is now described as "a version newer than the verified one" and "a version older than the verified one" (English and Japanese)
+- README.ja — the whole file now uses polite form
+
 ## [0.6.1] - 2026-11-24
 
 ### Changed

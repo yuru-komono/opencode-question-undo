@@ -2,29 +2,36 @@
 
 > **⚠ Read this before using it on a real session.**
 > - This tool makes **destructive changes to a session**. No support is offered.
-> - **By default only the session timeline is rewound.** File rollback is **an opt-in (default OFF)**: when enabled, the files touched by the work after the question are also returned to the boundary point (hand edits or other sessions' changes made after the question are lost).
+> - **By default only the session timeline is rewound.** File rollback is an opt-in (default OFF): when enabled, the files touched by the work after the question are also returned to the boundary point.
 > - **A staged revert is reversible only until your next send.** Sending while staged commits it, and the hidden tail becomes unrecoverable.
-> - The CLI's `--commit` deletes history immediately (irreversible).
-> - **If you notice you answered a question wrongly, stop the running response (Esc) as early as possible** — the later you notice, the more subsequent work falls inside the revert range.
 > - **Never use it first on a session involved in production or real work — rehearse on a disposable dummy session until you fully trust the flow.**
-> - **Precondition:** your harness must call the `question` tool in a dedicated step (see "Requirement" below).
 
-A tool to **re-answer a question you answered wrongly** in OpenCode (measured on v2.4.1). The purpose is re-answering; the method is to undo only the work done after the question and have the same question output again — it stages a `revert` right **after** the answered question, so the step that asked the question and the answered question card stay on screen while only the work done afterwards is temporarily hidden, and then the exact same question is re-presented verbatim. Deleting history (commit) is never the default. **It cannot make the assistant rethink a badly formed question** — the re-presented question (text, options, multiple) is identical.
-
-On all three surfaces (Desktop, Web UI, TUI) the same three commands are available. Re-presentation is not a draft written into the composer: **the server sends the stored instruction directly**, so a mistyped edit or a cleared input box cannot lose it.
+A tool to **re-answer a question you answered wrongly** in OpenCode (measured on v2.4.1). It undoes only the work done after the question and has the same question output again. The same three commands are available on all three surfaces (Desktop, Web UI, TUI).
 
 ## Why
 
-**The purpose is to re-answer a question you got wrong; the method is to undo only the work done after the question and have the same question output again.** You undo the answer to a `question` and answer it again. OpenCode v2.4.1 (released 2026-11-23) still has no undo for question answers, and the upstream issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) was still open as of 2026-11-24 — re-answering questions was explicitly deferred upstream to a separate later issue. This tool only triggers the existing revert (stage/commit) machinery at the question boundary; everything after that (re-running, clearing) uses each surface's standard operations.
+OpenCode v2.4.1 (released 2026-11-23) still has no undo for question answers. The upstream issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) was still open as of 2026-11-24, and re-answering questions was explicitly deferred upstream to a separate later issue. This tool only triggers the existing revert (stage/commit) machinery at the question boundary; everything after that (re-running, clearing) uses each surface's standard operations.
+
+The target scenario: after moving past the confirmation step into implementation, you want to redo from that confirmation. Only the later work is discarded; the asking step's text and the question itself survive.
 
 **What this tool does not do:**
 
 - It does not change the question. The re-presented question is identical in text, options and multiple. If the question itself was badly formed, this tool cannot fix it.
 - By default it does not roll back files. Unless you enable it, files edited, created or deleted by the work after the question stay as they are (file rollback is an opt-in; the design rationale and how to enable it are in "Safety").
 
-The target scenario: after moving past the confirmation step into implementation, you want to redo from that confirmation. Only the later work is discarded; the asking step's text and the question itself survive.
+## Requirements
 
-## Requirement: call `question` in a dedicated step
+| Requirement | What is required | What happens when it is not met |
+|---|---|---|
+| OpenCode version | The verified version is 2.4.1. The same version runs silently, **a version newer than the verified one and an unparseable version (suffixes, dev builds, …) warn and run**, **a version older than the verified one is refused** | The three surfaces print a refusal. The CLI runs its read-only modes with a warning, and `--allow-version-drift` runs the rest. The warning goes only to the server log, never to the three surfaces |
+| Harness rule | the `question` tool is called in a dedicated step (the rule and the per-path table are below, in this section) | The default boundary is safe; the other paths lose the asking step along with everything in it |
+| Git (only when file rollback is enabled) | ① the session's project is a Git repository ② the server process can resolve the `git` CLI ③ snapshots are not disabled in the config | The stage reports that there is nothing to restore, and cancel tells you that file changes made while staged are not returned |
+| The `opencode` CLI | the server process can resolve `opencode`; if it cannot, set `QUESTION_UNDO_CLI` to the executable path | stage, apply and cancel cannot run |
+| Node.js and Python | Node.js to install the plugin, Python 3 for `tools/smoke.py` | Installation and CLI runs fail |
+
+The `engines: 2.4.1` field in `package.json` records the verified version, not an accepted range. Re-verify after any OpenCode update.
+
+### Rule: call `question` in a dedicated step
 
 **This tool assumes your harness (system prompt or equivalent) enforces this rule. Without it, the paths in the table below destroy the asking step along with everything in it.**
 
@@ -57,7 +64,7 @@ With dedicated question steps, message granularity becomes effectively part gran
 
 1. With the session open, type `/undo-answer` in the input box.
    - It locates the latest answered question and stages a `revert` with **the first work message right after the answered question** as the boundary. The later work becomes hidden; the asking step's text and the answered question card survive.
-   - The re-presentation instruction is saved in the plugin's server-side storage.
+   - The re-presentation instruction is saved in the plugin's server-side storage. The server sends it directly rather than writing it into the composer, so a mistyped edit or a cleared input box cannot lose it.
 2. Look at the timeline and decide.
    - **`/undo-answer-apply`** — the server sends the stored instruction. The send commits the stage, and the exact same question is re-presented verbatim.
    - **`/undo-answer-cancel`** — clears the stage and drops the record, restoring the timeline (do this **before any new send**).
@@ -88,7 +95,7 @@ python tools/smoke.py --session <sid> --files                      # stage with 
 
 ## Safety
 
-- **By default only the session timeline is rewound. File rollback (`files:true`) is an opt-in and the default is OFF.** When enabled, the stage uses the per-step start trees upstream keeps in a Git-based shadow repository (`global.data/snapshot/…`; your own git history stays clean) and restores **only the paths touched by the work steps after the boundary**, each to the state at the first post-boundary step that touched it (files created after the boundary are deleted; unrelated paths are untouched). How to enable it: on the three surfaces, an `undo-files.on` marker in the session's project root (existence only; its contents are never read) or the `FILES_MODE` constant in `src/undo-server.js`; on the CLI, `--files` (the CLI also consults `undo-files.on` in the current working directory). Precedence: CLI flag > marker > constant. Preconditions: ① the session's project is a Git repository, ② the server process can resolve the `git` CLI, ③ snapshots are not disabled in config. Excluded: paths ignored by `.gitignore`, and untracked files over 2 MB. Three reasons the default is OFF: ① it **silently overwrites** edits you made by hand or in another session after the question (upstream #54026); ② on a non-git project upstream reports success while restoring nothing (#38672); ③ the meaning of revert.files may change in the future (#15391). When it is enabled but the project is not a Git repository or the snapshot capture failed, the stage reports that nothing will be restored, and cancel tells you that file changes made while staged are not returned. To roll back files as well without this opt-in, use OpenCode's built-in `/undo` (requires Git).
+- **By default only the session timeline is rewound. File rollback (`files:true`) is an opt-in and the default is OFF.** When enabled, the stage uses the per-step start trees upstream keeps in a Git-based shadow repository (`global.data/snapshot/…`; your own git history stays clean) and restores **only the paths touched by the work steps after the boundary**, each to the state at the first post-boundary step that touched it (files created after the boundary are deleted; unrelated paths are untouched). How to enable it: on the three surfaces, an `undo-files.on` marker in the session's project root (existence only; its contents are never read) or the `FILES_MODE` constant in `src/undo-server.js`; on the CLI, `--files` (the CLI also consults `undo-files.on` in the current working directory). Precedence: CLI flag > marker > constant. The preconditions are the Git row of "Requirements" above. Excluded: paths ignored by `.gitignore`, and untracked files over 2 MB. Three reasons the default is OFF: ① it **silently overwrites** edits you made by hand or in another session after the question (upstream #54026); ② on a non-git project upstream reports success while restoring nothing (#38672); ③ the meaning of revert.files may change in the future (#15391). When it is enabled but the project is not a Git repository or the snapshot capture failed, the stage reports that nothing will be restored, and cancel tells you that file changes made while staged are not returned. To roll back files as well without this opt-in, use OpenCode's built-in `/undo` (requires Git).
 - Default is **stage only (reversible)**. The commit that deletes history lives only behind explicit CLI flags.
 - **The stage is reversible only until the next send.** Sending a new message while staged commits the stage; the hidden tail becomes unrecoverable. Clear with `/undo-answer-cancel` (or `--clear`) before sending.
 - Boundaries are per message and **include the boundary message itself**. The default boundary is the work message right after the answered question, so the asking step is never swept up.
@@ -100,10 +107,10 @@ python tools/smoke.py --session <sid> --files                      # stage with 
 
 ## Limitations and assumptions
 
-- **Message granularity.** The deletion boundary is per assistant message; every step from the boundary on disappears. If the question tool is called in a dedicated step with no body text (required convention, see "Requirement" above), message granularity becomes effectively part granularity.
+- **Message granularity.** The deletion boundary is per assistant message; every step from the boundary on disappears. If the question tool is called in a dedicated step with no body text (see "Requirements" above), message granularity becomes effectively part granularity.
 - **Re-presentation depends on the model.** The instruction carries the question text, options and multiple values verbatim, but the model itself re-runs the call. In measurements on disposable sessions, the re-presented question matched the payload JSON exactly.
-- **Missing server-side ctx APIs.** The 2.3.2/2.4.0/2.4.1 server plugin has no `session.revert` or message-list API (re-confirmed on the 2.4.1 SDK), so exactly those three operations (list, stage, clear) go through an `opencode api` bridge (the SWAP-POINT block in `src/undo-server.js`; when upstream exposes the API, replacing just that block is the whole migration). The server process must be able to resolve the `opencode` CLI; if it cannot, set the `QUESTION_UNDO_CLI` environment variable to the executable path (`smoke.py` honors the same variable).
-- **Version gate (v0.5.0 policy).** At run time the server version is compared with the verified 2.4.1 (the 2.4.1 re-verification covered the live server, the CLI boundary computation and command registration; full three-surface measurements were made on 2.3.2): **newer versions and unparseable forms (suffixes, dev builds, ...) warn and run; older versions are refused.** The CLI's read-only modes (`--list` / `--inspect` / `--print-prompt`) run with a warning even on older servers, and `--allow-version-drift` is the escape hatch for running on an older one. The plugin-side warning goes only to the server log (the three surfaces have no non-blocking warning channel). The `engines: 2.4.1` field in `package.json` records the verified version, not an accepted range. When file rollback is enabled and the server is unverified (newer or unparseable), it also warns that how revert.files is stored and restored may change in the future (upstream #15391). Re-verify after any OpenCode update.
+- **Missing server-side ctx APIs.** The 2.3.2/2.4.0/2.4.1 server plugin has no `session.revert` or message-list API (re-confirmed on the 2.4.1 SDK), so exactly those three operations (list, stage, clear) go through an `opencode api` bridge (the SWAP-POINT block in `src/undo-server.js`; when upstream exposes the API, replacing just that block is the whole migration).
+- **What the version gate was measured to.** The re-verification of 2.4.1 covered the live server, the CLI boundary computation and command registration; full three-surface measurements were made on 2.3.2. The verdicts and each surface's behavior are in "Requirements" above. When file rollback is enabled and the server is unverified (a version newer than the verified one, or unparseable), it also warns that how revert.files is stored and restored may change in the future (upstream #15391).
 - **Measured on Windows only.** Full-surface measurements were made on Windows 11 with the Desktop/Web/TUI surfaces of OpenCode 2.3.2; the 2.4.0 and 2.4.1 re-verifications covered the live server, the CLI (list/inspect/boundary) and command registration, not a full three-surface rehearsal. The POSIX side (Linux/macOS) is untested; the CLI bridge there resolves `opencode` via `shutil.which` and should work, but nothing is verified.
 - **Search window.** The message list is widened to 200 entries; older questions beyond that window are not found, and the tool refuses safely with "no answered question found". Fork/branch-derived sessions rewrite message ids, so ordering is chronological, not lexicographic.
 - **No notice line.** A successful stage sends no notice (`session.synthetic` with `resume:false` produces no timeline and no `message.list` entry; measured). With the default resume the model would react to the notice and start talking. Judge success from the staged rendering change and from refusal messages.
@@ -117,11 +124,11 @@ python tools/smoke.py --session <sid> --files                      # stage with 
 - "A revert is already staged at another boundary": clear first with `/undo-answer-cancel` (or `--clear`).
 - "The staged boundary changed between two reads": another surface staged concurrently. Check the timeline, clear if needed, then re-run.
 - "No work message after the answered question": the follow-up work has not started. To redo the question itself, use the CLI's `--mode question`.
-- Version mismatch message: this tool is verified on v2.4.1. On an older server all three surfaces refuse with a message (to run anyway, use the CLI's `--allow-version-drift`). On a newer server it runs with a warning that appears only in the server/sidecar log, never in the UI. After an update, re-check boundary behavior with `smoke.py --list` / `--inspect` before trusting it.
+- Version mismatch message: this tool is verified on v2.4.1. On a server older than that, all three surfaces refuse with a message (to run anyway, use the CLI's `--allow-version-drift`). On a server newer than that, it runs with a warning that appears only in the server/sidecar log, never in the UI. After an update, re-check boundary behavior with `smoke.py --list` / `--inspect` before trusting it.
 
 ## Removal once upstream implements #8689
 
-When upstream ships revert/fork from user messages with question support, delete the single `plugins` entry and this repository. Nothing else remains in the database or config (server API only). The requirement above also improves the granularity of native revert, so it stays worth keeping after removal.
+When upstream ships revert/fork from user messages with question support, delete the single `plugins` entry and this repository. Nothing else remains in the database or config (server API only). The rule above also improves the granularity of native revert, so it stays worth keeping after removal.
 
 ## Provenance and license
 
