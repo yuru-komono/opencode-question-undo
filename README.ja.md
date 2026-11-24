@@ -10,7 +10,7 @@ OpenCode（v2.4.1 で実測）で**間違えて答えた question に答え直�
 
 ## Why
 
-OpenCode v2.4.1（2026-11-23 リリース）にも、question 回答用の undo はまだありません。上流の issue（[anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)）は 2026-11-24 時点で open のままですが、question 回答の扱いは別の issue へ延期すると明示されています。このツールは既存の revert（stage/commit）を question 境界で発動するだけを行い、その後の再実行や解除は各面の標準操作そのまま使えます。
+OpenCode v2.4.1（2026-11-23 リリース）にも、question 回答用の undo はまだありません。上流の issue（[anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)）は 2026-11-24 時点で open のままです。question 回答の扱いについては、スレッド内で「別の issue に立てて後で扱うべきだ」という指摘があるだけで、その issue はまだ立っておらず、以前これを要望した #8589 と #12625 は活動停止による自動 close になっています。このツールは既存の revert（stage/commit）を question 境界で発動するだけを行い、その後の再実行や解除は各面の標準操作そのまま使えます。
 
 想定している場面は、確認提示をまたいで実装まで進んだ後に「あの確認からやり直したい」となることです。実装で進んだ作業だけを捨て、質問を提示した step の本文と質問文はそのまま残せます。
 

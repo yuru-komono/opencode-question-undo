@@ -10,7 +10,7 @@ A tool to **re-answer a question you answered wrongly** in OpenCode (measured on
 
 ## Why
 
-OpenCode v2.4.1 (released 2026-11-23) still has no undo for question answers. The upstream issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) was still open as of 2026-11-24, and re-answering questions was explicitly deferred upstream to a separate later issue. This tool only triggers the existing revert (stage/commit) machinery at the question boundary; everything after that (re-running, clearing) uses each surface's standard operations.
+OpenCode v2.4.1 (released 2026-11-23) still has no undo for question answers. The upstream issue ([anomalyco/opencode#8689](https://github.com/anomalyco/opencode/issues/8689)) was still open as of 2026-11-24. Inside that thread a reader suggested moving re-answering questions into an issue of its own, but no such issue exists, and the two issues that asked for it (#8589 and #12625) were auto-closed for inactivity. This tool only triggers the existing revert (stage/commit) machinery at the question boundary; everything after that (re-running, clearing) uses each surface's standard operations.
 
 The target scenario: after moving past the confirmation step into implementation, you want to redo from that confirmation. Only the later work is discarded; the asking step's text and the question itself survive.
 

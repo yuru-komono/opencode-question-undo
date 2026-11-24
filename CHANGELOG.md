@@ -4,6 +4,13 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-24
+
+### Changed
+
+- README — corrected what the docs claimed about upstream handling of question answers: the separate issue is only a suggestion inside #8689, no such issue exists, and the two issues that asked for it were auto-closed for inactivity (English and Japanese)
+- The version shown in the re-presentation instruction is now `[q_undo v0.7.1]`
+
 ## [0.7.0] - 2026-11-24
 
 ### Changed

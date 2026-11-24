@@ -1,6 +1,6 @@
 {
   "name": "question-undo",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "OpenCode plugin that redoes only the latest answered question (three surfaces, two-stage stage/apply, server-side commands)",
   "type": "module",
   "private": true,
