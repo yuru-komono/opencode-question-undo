@@ -12,12 +12,14 @@ import {
   MAX_QUESTIONS_PER_PART,
   MAX_STRING_CHARS,
   PayloadTooLarge,
+  VERIFIED_VERSIONS,
   buildInstruction,
   compareMessages,
   compareVersions,
   computeWorkBoundary,
   escapeSentinels,
   extractPayload,
+  gateVerdict,
   resolveFilesMode,
   tailOutcome,
 } from "../src/undo-kernel.js";
@@ -202,6 +204,57 @@ test("compareVersions: unparseable forms are unknown (suffixes, dev builds, empt
   }
   // a malformed pin side is unknown too (the parity gate #7 shape guard prevents it upstream)
   assert.equal(compareVersions("2.3.2", "2.3"), "unknown");
+});
+
+test("gateVerdict: members of the verified set are same (the v0.7.0 acceptance basis)", () => {
+  // an empty set would make the loop vacuous (the boundary values are pinned individually: review L4)
+  assert.ok(VERIFIED_VERSIONS.length >= 2, `verified set too small: ${JSON.stringify(VERIFIED_VERSIONS)}`);
+  for (const v of VERIFIED_VERSIONS) {
+    assert.equal(gateVerdict(v, VERIFIED_VERSIONS), "same", `expected same: ${v}`);
+  }
+  assert.equal(gateVerdict("2.3.2", VERIFIED_VERSIONS), "same");
+  assert.equal(gateVerdict("2.4.0", VERIFIED_VERSIONS), "same");
+});
+
+test("gateVerdict: newer than the newest verified version is newer, older than the oldest is older", () => {
+  assert.equal(gateVerdict("2.4.2", VERIFIED_VERSIONS), "newer");
+  assert.equal(gateVerdict("2.10.0", VERIFIED_VERSIONS), "newer"); // numeric (lexicographic would say older)
+  assert.equal(gateVerdict("2.3.1", VERIFIED_VERSIONS), "older");
+  assert.equal(gateVerdict("2.2.9", VERIFIED_VERSIONS), "older");
+  assert.equal(gateVerdict("2.3.2", VERIFIED_VERSIONS), "same"); // the oldest entry itself
+  assert.equal(gateVerdict("2.4.1", VERIFIED_VERSIONS), "same"); // the newest entry itself
+});
+
+test("gateVerdict: between the oldest and the newest but not listed is unverified (warns and runs)", () => {
+  assert.equal(gateVerdict("2.3.9", VERIFIED_VERSIONS), "unverified");
+  assert.equal(gateVerdict("2.3.3", VERIFIED_VERSIONS), "unverified");
+});
+
+test("gateVerdict: unparseable forms, an empty set and a non-array set are unknown (callers warn and run)", () => {
+  for (const v of ["2.3.2-beta.1", "2.3", "", "v2.3.2", undefined, null, 2.32, {}]) {
+    assert.equal(gateVerdict(v, VERIFIED_VERSIONS), "unknown", `expected unknown: ${String(v)}`);
+  }
+  // an empty set drops the older refusal (fail-open); parity check #14 is what stops it upstream,
+  // and this function's contract only reaches "returns unknown" (review L3)
+  assert.equal(gateVerdict("2.4.1", []), "unknown");
+  assert.equal(gateVerdict("2.4.1", ["2.3"]), "unknown"); // a malformed set side is unknown too
+  // a non-array set argument is unknown (same treatment as the Python list/tuple guard: review L1)
+  for (const bad of [undefined, null, "2.3.2", 2.32, {}]) {
+    assert.equal(gateVerdict("2.4.1", bad), "unknown", `expected unknown: ${String(bad)}`);
+  }
+});
+
+test("gateVerdict: an alternate spelling of the minimum (2.3.02) is not refused, it is unverified", () => {
+  // VERSION_RE accepts leading zeros; missing the string match must not become a refusal (review L2)
+  assert.equal(gateVerdict("2.3.02", VERIFIED_VERSIONS), "unverified");
+  assert.equal(gateVerdict("2.3.1", VERIFIED_VERSIONS), "older"); // genuinely older still refuses
+});
+
+test("gateVerdict: independent of the order of the set (lo/hi are found with the comparator)", () => {
+  const shuffled = ["2.4.1", "2.3.2", "2.4.0"];
+  assert.equal(gateVerdict("2.3.9", shuffled), "unverified");
+  assert.equal(gateVerdict("2.2.0", shuffled), "older");
+  assert.equal(gateVerdict("9.0.0", shuffled), "newer");
 });
 
 test("resolveFilesMode: precedence truth table (flag > marker > constant)", () => {

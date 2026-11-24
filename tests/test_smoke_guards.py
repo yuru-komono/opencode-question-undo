@@ -100,14 +100,14 @@ class TestDefaultMode(unittest.TestCase):
 
 
 class TestVersionGate(unittest.TestCase):
-    """The four-row matrix of version_gate(allow_drift, readonly) (api is mocked; no real server)."""
+    """The matrix of version_gate(allow_drift, readonly) (api is mocked; no real server. v0.7.0 set basis)."""
 
-    def run_gate(self, server_version, allow_drift=False, readonly=False):
+    def run_gate(self, server_version, allow_drift=False, readonly=False, files=False):
         err = io.StringIO()
         with mock.patch.object(smoke, "api", return_value={"version": server_version}), \
              contextlib.redirect_stderr(err):
             try:
-                smoke.version_gate(allow_drift, readonly)
+                smoke.version_gate(allow_drift, readonly, files)
                 raised = None
             except SystemExit as e:
                 raised = e
@@ -117,6 +117,32 @@ class TestVersionGate(unittest.TestCase):
         raised, err = self.run_gate(smoke.PINNED_VERSION)
         self.assertIsNone(raised)
         self.assertEqual(err, "")
+
+    def test_every_verified_member_is_silent(self):
+        # v0.7.0: the basis is the verified set, not a single pin (2.3.2 and 2.4.0 must not be refused)
+        self.assertGreaterEqual(len(smoke.VERIFIED_VERSIONS), 2)  # an empty set makes the loop vacuous (L4)
+        for v in smoke.VERIFIED_VERSIONS:
+            raised, err = self.run_gate(v)
+            self.assertIsNone(raised, f"verified version refused: {v}")
+            self.assertEqual(err, "", f"warning printed for a verified version: {v}")
+
+    def test_files_notice_fires_on_verified_but_unmeasured_version(self):
+        # file rollback is measured on PINNED_VERSION; 2.3.2 became "same" in v0.7.0 but the files
+        # notice must not disappear there (review M1)
+        raised, err = self.run_gate("2.3.2", files=True)
+        self.assertIsNone(raised)
+        self.assertIn("files:true", err)
+
+    def test_files_notice_silent_on_the_pin(self):
+        raised, err = self.run_gate(smoke.PINNED_VERSION, files=True)
+        self.assertIsNone(raised)
+        self.assertEqual(err, "")
+
+    def test_unverified_between_min_and_max_warns_and_runs(self):
+        raised, err = self.run_gate("2.3.9")
+        self.assertIsNone(raised)
+        self.assertIn("[warning]", err)
+        self.assertIn("unverified", err)
 
     def test_newer_warns_and_runs(self):
         raised, err = self.run_gate("99.0.0")

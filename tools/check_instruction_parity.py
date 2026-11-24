@@ -27,14 +27,18 @@ Checks:
 11. The `VERSION_RE` pattern strings agree (the version-gate parse rule; same regex-literal
     idiom as #10. The Python side carries a `(?a)` prefix for engine semantics parity and it
     is stripped before comparison; a missing prefix is itself a finding).
-12. The version verdict tokens (`same` / `newer` / `older` / `unknown`) appear as quoted
-    literals inside the comparator bodies, and each gate calls its comparator by name (a
-    whole-file substring check would pass after a rename because comments carry the vocabulary).
+12. The version verdict tokens (`same` / `newer` / `unverified` / `older` / `unknown`) appear as
+    quoted literals inside the comparator pair bodies (`compareVersions`+`gateVerdict` /
+    `compare_versions`+`gate_verdict`), and each gate calls its verdict function with the verified
+    set (a whole-file substring check would pass after a rename because comments carry the vocabulary).
 13. The file-rollback opt-in (v0.6.0): `FILES_MARKER` (the project-root marker name) agrees on both
     sides, the `FILES_MODE` default is false on both sides (flipping the destructive default is a
     finding), and the `files` stage-payload vocabulary appears on both sides. `FILES_MODE` is a
     bool, so the integer-constant reader used by #4 cannot read it; literal substring matching is
     used instead.
+14. The verified version set (v0.7.0): `VERIFIED_VERSIONS` agrees between the JS literal and the
+    Python value, and `PINNED_VERSION` (server and CLI) equals the newest entry (raising the pin
+    without adding to the set would make the warning name a different set than the gate accepts).
 
 Usage:
     python tools/check_instruction_parity.py
@@ -65,8 +69,9 @@ PKG_JSON = ROOT / "package.json"
 
 # Boundary rule-name vocabulary (JS side: kernel+server, Python side: undo_core+smoke).
 RULE_NAMES = ("raw-successor", "skip-idle-to-first-work", "no-work", "admin-only", "questionStep")
-# Version verdict vocabulary (the four tokens returned by compareVersions / compare_versions).
-VERDICT_NAMES = ("same", "newer", "older", "unknown")
+# Version verdict vocabulary (the five tokens returned by gateVerdict / gate_verdict).
+# compareVersions / compare_versions return four of them (no "unverified").
+VERDICT_NAMES = ("same", "newer", "unverified", "older", "unknown")
 QUOTED_RE = re.compile(r"\"([^\"]+)\"")
 
 
@@ -175,19 +180,52 @@ def version_re_patterns():
 
 
 def comparator_bodies():
-    """Function bodies of the comparator pair (for the scoped verdict-token check). Unreadable sides are None."""
+    """Function bodies of the version-gate comparator pair (for the scoped verdict-token check).
+
+    The comparator and the gate-verdict bodies are concatenated: `unverified` belongs to the
+    gate side only, so checking the comparator alone would miss it. Unreadable sides are None.
+    """
     out = {}
     try:
-        m = re.search(r"export function compareVersions\(found, pinned\) \{(.*?)\n\}",
-                      JS_FILE.read_text(encoding="utf-8"), re.DOTALL)
-        out["src/undo-kernel.js"] = m.group(1) if m else None
+        js_text = JS_FILE.read_text(encoding="utf-8")
+        parts = []
+        for pattern in (r"export function compareVersions\(found, pinned\) \{(.*?)\n\}",
+                        r"export function gateVerdict\(found, verified\) \{(.*?)\n\}"):
+            m = re.search(pattern, js_text, re.DOTALL)
+            if m:
+                parts.append(m.group(1))
+        out["src/undo-kernel.js"] = "\n".join(parts) if parts else None
     except OSError:
         out["src/undo-kernel.js"] = None
     try:
-        m = re.search(r"def compare_versions\(found, pinned\):\n(.*?)(?=\n\ndef |\Z)",
-                      UNDO_CORE_PY.read_text(encoding="utf-8"), re.DOTALL)
-        out["tools/undo_core.py"] = m.group(1) if m else None
+        py_text = UNDO_CORE_PY.read_text(encoding="utf-8")
+        parts = []
+        # Only indented lines belong to the body (the capture ends at the first column-0 line).
+        # A `(?=\n\ndef |\Z)` terminator swallows the comment block after the function and runs on
+        # to the next def, so verdict tokens in comments would satisfy the check (review M3).
+        for pattern in (r"def compare_versions\(found, pinned\):\n(.*?)(?=\n[^ \t])",
+                        r"def gate_verdict\(found, verified\):\n(.*?)(?=\n[^ \t])"):
+            m = re.search(pattern, py_text, re.DOTALL)
+            if m:
+                parts.append(m.group(1))
+        out["tools/undo_core.py"] = "\n".join(parts) if parts else None
     except OSError:
+        out["tools/undo_core.py"] = None
+    return out
+
+
+def verified_versions():
+    """`VERIFIED_VERSIONS` (the verified set) read from the JS literal and the Python value. Unreadable sides are None."""
+    out = {}
+    try:
+        m = re.search(r"export const VERIFIED_VERSIONS = \[(.*?)\];",
+                      JS_FILE.read_text(encoding="utf-8"), re.DOTALL)
+        out["src/undo-kernel.js"] = QUOTED_RE.findall(m.group(1)) if m else None
+    except OSError:
+        out["src/undo-kernel.js"] = None
+    try:
+        out["tools/undo_core.py"] = list(undo_core.VERIFIED_VERSIONS)
+    except AttributeError:
         out["tools/undo_core.py"] = None
     return out
 
@@ -326,9 +364,9 @@ def main() -> int:
     if all(v is not None for v in vers.values()) and len(set(vers.values())) > 1:
         findings.append("VERSION_RE patterns differ: " + " / ".join(f"{k}={v!r}" for k, v in vers.items()))
 
-    # 12. Version verdict tokens, scoped to the comparator bodies (a whole-file substring check
-    #     would pass after a rename because comments carry the vocabulary). Each gate must also
-    #     call its comparator by name.
+    # 12. Version verdict tokens, scoped to the comparator pair bodies (a whole-file substring
+    #     check would pass after a rename because comments carry the vocabulary). Each gate must
+    #     also call its verdict function by name.
     bodies = comparator_bodies()
     for label, body in bodies.items():
         if body is None:
@@ -338,11 +376,14 @@ def main() -> int:
             if f'"{name}"' not in body:
                 findings.append(f"verdict literal missing in comparator body: {label} {name}")
     for label, needle, text in (
-        ("src/undo-server.js", "compareVersions(", js_server_text),
-        ("tools/smoke.py", "compare_versions(", py_smoke_text),
+        # The call form itself is required: #14 cannot detect a regression such as
+        # `gateVerdict(ctx.app.version, [PINNED_VERSION])`, which restores the single-pin refusal
+        # while the warning still advertises the full set (review L5).
+        ("src/undo-server.js", "gateVerdict(ctx.app.version, VERIFIED_VERSIONS)", js_server_text),
+        ("tools/smoke.py", "gate_verdict(version, VERIFIED_VERSIONS)", py_smoke_text),
     ):
         if needle not in text:
-            findings.append(f"gate does not call the comparator: {label}")
+            findings.append(f"gate does not call the verdict function with the verified set: {label}")
 
     # 13. File-rollback opt-in (v0.6.0): marker name match, false default, stage-payload files
     #     vocabulary. This guards the destructive default (files:false) and the enable knob against
@@ -372,6 +413,31 @@ def main() -> int:
     if "resolve_files_mode(" not in py_smoke_text:
         findings.append("the Python CLI part does not call resolve_files_mode")
 
+    # 14. Verified version set (v0.7.0): the two sides agree, and the pin equals the newest entry.
+    #     This catches adding to the set while leaving the pin behind, and raising the pin without
+    #     adding to the set (the warning would then name a different set than the gate accepts).
+    verified = verified_versions()
+    for label, value in verified.items():
+        if not value:
+            findings.append(f"VERIFIED_VERSIONS unreadable: {label}")
+    # Every entry must also have the x.y.z form required of the pins. Both kernels silently drop
+    # unparseable entries, so a malformed one makes "the set the warning advertises" differ from
+    # "the set the gate accepts"; if every entry is malformed the set becomes empty, the verdict is
+    # unknown, and the older refusal disappears (same digit bound and ASCII rule as #7).
+    for label, value in verified.items():
+        for entry in value or []:
+            if not re.fullmatch(r"[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}", entry):
+                findings.append(f"verified-set entry is not a plain x.y.z: {label}={entry!r}")
+    if all(v is not None for v in verified.values()) and verified["src/undo-kernel.js"] != verified["tools/undo_core.py"]:
+        findings.append("VERIFIED_VERSIONS differs: " + " / ".join(f"{k}={v}" for k, v in verified.items()))
+    well_formed = [v for v in verified.get("tools/undo_core.py") or []
+                   if undo_core.parse_version(v) is not None]
+    if well_formed:
+        newest = max(well_formed, key=undo_core.parse_version)
+        for label in ("src/undo-server.js", "tools/smoke.py"):
+            if pins.get(label) is not None and pins[label] != newest:
+                findings.append(f"PINNED_VERSION is not the newest verified version: {label}={pins[label]} / newest {newest}")
+
     if findings:
         for f in findings:
             print(f"parity: {f}", file=sys.stderr)
@@ -381,6 +447,7 @@ def main() -> int:
     print(
         f"parity: OK (instruction {len(INSTRUCTION_FRAME)} lines, 2 sentinels, {len(FIELD_LABELS)} field labels, "
         f"{len(CAP_NAMES)} caps, ZWSP match, {len(STRUCT_STRINGS)} structural strings, version pin {pins.get('tools/smoke.py')} (plain x.y.z), "
+        f"verified set {len(verified['tools/undo_core.py'])} versions match, "
         f"{len(undo_core.ADMIN_TYPES)} ADMIN_TYPES words, {len(RULE_NAMES)} rule names, SID_RE match, "
         f"VERSION_RE match, {len(VERDICT_NAMES)} verdict tokens, files marker match, false default, stage files vocabulary)"
     )

@@ -55,7 +55,7 @@ ZERO_WIDTH_SPACE = "\u200b"
 # both sides to the released version together).
 # INSTR-BEGIN
 INSTRUCTION_FRAME = [
-    "[q_undo v0.6.2] Instruction: invalidate the previous question answer and re-present the same question",
+    "[q_undo v0.7.0] Instruction: invalidate the previous question answer and re-present the same question",
     "",
     "1. The question tool call in the previous assistant step and all of its selection results are void. Do not build on that selection.",
     "2. Re-run exactly the question tool call shown in the payload below. Keep the question text, the header, every option's label and description, and the multiple value verbatim, including counts and order.",
@@ -329,9 +329,10 @@ def render_inspect_table(messages, question_message, boundary, outcome):
 
 # ---------------------------------------------------------------------------
 # Version-gate comparison (v0.5.0). Mirror of VERSION_RE / compareVersions in
-# `src/undo-kernel.js`. Same four verdict tokens ("same" | "newer" | "older" |
-# "unknown"; parity check #12 verifies them). "newer" means the server is ahead of
-# the pin. Unparseable forms (suffixes, dev builds, non-strings) are "unknown".
+# `src/undo-kernel.js`. compare_versions returns four verdict tokens and
+# gate_verdict returns five ("unverified" is added; parity check #12 verifies the
+# vocabulary). "newer" means the server is ahead of the verified set. Unparseable
+# forms (suffixes, dev builds, non-strings) are "unknown".
 # Strict x.y.z parse (1-9 digits per segment; no lenient suffix stripping).
 # (?a) forces ASCII \d and fullmatch removes the trailing-newline leniency of $:
 # without them the CLI and the plugin flip verdicts on inputs like "2.3.1\n" or
@@ -360,6 +361,53 @@ def compare_versions(found, pinned):
     if a == b:
         return "same"
     return "newer" if a > b else "older"
+
+
+# ---------------------------------------------------------------------------
+# Set of verified OpenCode versions (v0.7.0). The version gate accepts this set
+# instead of a single pin. Rule for adding an entry: a new OpenCode version joins
+# the verified set only after it is measured on all three surfaces (Desktop, Web
+# UI, TUI). 2.3.2 has that full measurement; 2.4.0 and 2.4.1 predate the rule and
+# were measured on the running server, the CLI boundary calculation and command
+# registration only. Mirror: VERIFIED_VERSIONS in src/undo-kernel.js (parity check
+# #14 verifies the two sets and that the pin equals the newest entry).
+# ---------------------------------------------------------------------------
+VERIFIED_VERSIONS = ("2.3.2", "2.4.0", "2.4.1")
+
+
+def gate_verdict(found, verified):
+    """gate_verdict(found, verified) → "same" | "newer" | "unverified" | "older" | "unknown".
+
+    same       listed in the verified set (runs silently)
+    newer      newer than the newest verified version (warns and runs)
+    unverified between the oldest and newest verified version but not listed itself
+               (warns and runs: the versions around it work, so this one probably does)
+    older      older than the oldest verified version (refused)
+    unknown    unparseable form, and an empty or wholly unparseable set (warns and runs;
+               parity check #14 prevents the refusal from disappearing upstream)
+    `verified` must be a list or tuple (a string or a non-iterable argument is "unknown",
+    matching the JS side's Array.isArray guard).
+    """
+    if parse_version(found) is None:
+        return "unknown"
+    if not isinstance(verified, (list, tuple)):
+        return "unknown"
+    known = [v for v in verified if parse_version(v) is not None]
+    if not known:
+        return "unknown"
+    if found in known:
+        return "same"
+    lo = hi = known[0]
+    for v in known:
+        if compare_versions(v, hi) == "newer":
+            hi = v
+        if compare_versions(v, lo) == "older":
+            lo = v
+    if compare_versions(found, hi) == "newer":
+        return "newer"
+    # decided by whether it is older than the minimum (a form that is numerically equal to
+    # the minimum but textually different, e.g. "2.3.02", is not refused)
+    return "older" if compare_versions(found, lo) == "older" else "unverified"
 
 
 # ---------------------------------------------------------------------------

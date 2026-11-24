@@ -200,6 +200,51 @@ class TestCompareVersions(unittest.TestCase):
         self.assertEqual(undo_core.compare_versions("2.3.2", "2.3"), "unknown")
 
 
+class TestGateVerdict(unittest.TestCase):
+    """Version-gate acceptance basis (v0.7.0; hand-mirrored table with tests/undo-kernel.test.js)."""
+
+    def test_members_of_verified_set_are_same(self):
+        # an empty set would make the loop vacuous (boundary values pinned individually: review L4)
+        self.assertGreaterEqual(len(undo_core.VERIFIED_VERSIONS), 2)
+        for v in undo_core.VERIFIED_VERSIONS:
+            self.assertEqual(undo_core.gate_verdict(v, undo_core.VERIFIED_VERSIONS), "same")
+        self.assertEqual(undo_core.gate_verdict("2.3.2", undo_core.VERIFIED_VERSIONS), "same")
+        self.assertEqual(undo_core.gate_verdict("2.4.0", undo_core.VERIFIED_VERSIONS), "same")
+
+    def test_newer_and_older_than_the_set(self):
+        self.assertEqual(undo_core.gate_verdict("2.4.2", undo_core.VERIFIED_VERSIONS), "newer")
+        self.assertEqual(undo_core.gate_verdict("2.10.0", undo_core.VERIFIED_VERSIONS), "newer")
+        self.assertEqual(undo_core.gate_verdict("2.3.1", undo_core.VERIFIED_VERSIONS), "older")
+        self.assertEqual(undo_core.gate_verdict("2.2.9", undo_core.VERIFIED_VERSIONS), "older")
+
+    def test_unverified_between_min_and_max(self):
+        # the versions around it are verified, so an unlisted one in between is expected to work
+        self.assertEqual(undo_core.gate_verdict("2.3.9", undo_core.VERIFIED_VERSIONS), "unverified")
+        self.assertEqual(undo_core.gate_verdict("2.3.3", undo_core.VERIFIED_VERSIONS), "unverified")
+
+    def test_unknown_forms(self):
+        for v in ("2.3.2-beta.1", "2.3", "", "v2.3.2", None, 2.32, {}):
+            self.assertEqual(undo_core.gate_verdict(v, undo_core.VERIFIED_VERSIONS), "unknown")
+        # an empty set drops the older refusal (fail-open); parity check #14 stops it upstream, and
+        # this function's contract only reaches "returns unknown" (review L3)
+        self.assertEqual(undo_core.gate_verdict("2.4.1", ()), "unknown")
+        self.assertEqual(undo_core.gate_verdict("2.4.1", ("2.3",)), "unknown")
+        # a set argument that is not a list/tuple is unknown (same as the JS Array.isArray guard: L1)
+        for bad in (None, "2.3.2", 2.32, {}):
+            self.assertEqual(undo_core.gate_verdict("2.4.1", bad), "unknown")
+
+    def test_alternate_spelling_of_the_minimum_is_not_refused(self):
+        # VERSION_RE accepts leading zeros; missing the string match must not become a refusal (L2)
+        self.assertEqual(undo_core.gate_verdict("2.3.02", undo_core.VERIFIED_VERSIONS), "unverified")
+        self.assertEqual(undo_core.gate_verdict("2.3.1", undo_core.VERIFIED_VERSIONS), "older")
+
+    def test_order_independent(self):
+        shuffled = ("2.4.1", "2.3.2", "2.4.0")
+        self.assertEqual(undo_core.gate_verdict("2.3.9", shuffled), "unverified")
+        self.assertEqual(undo_core.gate_verdict("2.2.0", shuffled), "older")
+        self.assertEqual(undo_core.gate_verdict("9.0.0", shuffled), "newer")
+
+
 class TestResolveFilesMode(unittest.TestCase):
     """Effective file-rollback mode of the opt-in (hand-mirrored table with tests/undo-kernel.test.js)."""
 

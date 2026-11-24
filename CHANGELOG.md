@@ -4,6 +4,16 @@ Notable changes to this artifact are recorded in this file. The format follows K
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-24
+
+### Changed
+
+- The version gate now accepts a set of verified OpenCode versions (2.3.2 / 2.4.0 / 2.4.1); a verified version runs silently
+- Versions newer than the verified ones and unverified versions inside the verified range now warn and run (versions such as 2.4.0 used to be refused)
+- Only versions older than the oldest verified one are refused; the escape hatch remains the CLI's `--allow-version-drift`
+- With file rollback enabled, the "restore semantics are unmeasured on this server" notice now also appears on the older verified versions
+- The version shown in the re-presentation instruction is now `[q_undo v0.7.0]`
+
 ## [0.6.2] - 2026-11-24
 
 ### Changed

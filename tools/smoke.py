@@ -44,10 +44,11 @@ Usage:
   python tools/smoke.py --session <sid> --mode work --commit --reprompt   # delete then re-send (irreversible)
   python tools/smoke.py --session <sid> --files                # stage with file rollback enabled (files:true)
 
-Version gate (v0.5.0): a server newer than the verified PINNED_VERSION, or an unparseable
-version, warns and runs; an older server is refused. Read-only modes run with a warning even
-on older servers (the re-verification ritual must not be blocked). --allow-version-drift is
-the explicit escape hatch for older servers.
+Version gate (v0.7.0): a member of the verified set (undo_core.VERIFIED_VERSIONS) runs silently; a
+version newer than the newest entry, an unlisted version at or above the oldest entry, and an
+unparseable version warn and run; a version older than the oldest entry is refused. Read-only modes
+run with a warning even on older servers (the re-verification ritual must not be blocked).
+--allow-version-drift is the explicit escape hatch for servers older than the oldest verified one.
 """
 
 import argparse
@@ -57,6 +58,7 @@ from pathlib import Path
 
 from fetch_api import ApiError, api
 from undo_core import (
+    VERIFIED_VERSIONS,
     PayloadTooLarge,
     build_instruction,
     compare_versions,
@@ -65,6 +67,7 @@ from undo_core import (
     describe_boundary,
     extract_payload,
     find_latest_question,
+    gate_verdict,
     last_user_text_before,
     render_inspect_table,
     resolve_files_mode,
@@ -80,6 +83,8 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+# Newest entry of the verified set (VERIFIED_VERSIONS in undo_core.py). Used to name the
+# measured version in warnings. Parity check #14 verifies it against the set.
 PINNED_VERSION = "2.4.1"
 SID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # message.list default page is the newest 50 (measured on v2.3.2). limit=1000 returns HTTP 400, so use 200.
@@ -109,29 +114,38 @@ def display_version(v):
 
 
 def version_gate(allow_drift, readonly, files=False):
-    """Runtime version gate (v0.5.0 policy).
+    """Runtime version gate (v0.7.0 policy).
 
-    same → silent pass. newer / unknown (unparseable) → warn and run.
-    older → mutating modes refuse (--allow-version-drift downgrades the refusal to a warning).
+    same (a member of the verified set) → silent pass.
+    newer / unverified (at or above the oldest entry, at or below the newest, not listed) /
+    unknown (unparseable) → warn and run.
+    older (older than the oldest verified version) → mutating modes refuse
+    (--allow-version-drift downgrades the refusal to a warning).
     Read-only modes (--list / --inspect / --print-prompt) warn and run even on older servers
     (so the re-verification ritual is not blocked). Warnings go to stderr (stdout stays clean
     for --print-prompt).
-    With files enabled on an unverified version (newer / unknown) it also warns that the meaning
-    of revert.files may change upstream (issue #15391).
+    With files enabled on any server other than PINNED_VERSION (the newest verified version,
+    including older verified members) it also warns that the meaning of revert.files may change
+    upstream (issue #15391).
     """
     info = api("GET", "/api/info")
     version = (info or {}).get("version")
-    verdict = compare_versions(version, PINNED_VERSION)
-    if verdict == "same":
-        return
-    msg = f"server version {display_version(version)} differs from the verified {PINNED_VERSION} (verdict {verdict})"
-    if verdict == "older" and not allow_drift and not readonly:
-        raise SystemExit(
-            f"[version gate] {msg}. Refusing to run on a server older than the verified version. "
-            "--allow-version-drift bypasses it (at your own risk)."
+    verdict = gate_verdict(version, VERIFIED_VERSIONS)
+    if verdict != "same":
+        msg = (
+            f"server version {display_version(version)} is not one of the verified versions "
+            f"({' / '.join(VERIFIED_VERSIONS)}) (verdict {verdict})"
         )
-    print(f"[warning] {msg}", file=sys.stderr)
-    if files and not readonly:
+        if verdict == "older" and not allow_drift and not readonly:
+            raise SystemExit(
+                f"[version gate] {msg}. Refusing to run on a server older than the oldest verified version. "
+                "--allow-version-drift bypasses it (at your own risk)."
+            )
+        print(f"[warning] {msg}", file=sys.stderr)
+    # file rollback is measured on PINNED_VERSION (the newest verified version). Keyed to the pin
+    # rather than to set membership, so the notice also fires on 2.3.2 and 2.4.0, which became
+    # "same" in v0.7.0.
+    if files and not readonly and compare_versions(version, PINNED_VERSION) != "same":
         print(
             f"[warning] file rollback (files:true) is measured on the verified {PINNED_VERSION}. "
             f"Server {display_version(version)} is unverified, and how revert.files is stored and restored may change in the future (upstream #15391).",
@@ -234,7 +248,7 @@ def main():
     ap.add_argument("--commit", action="store_true", help="delete from the boundary on (irreversible; --reprompt required)")
     ap.add_argument("--reprompt", action="store_true", help="after commit, re-send the instruction (work mode) or the previous user message (question mode)")
     ap.add_argument("--allow-version-drift", action="store_true",
-                    help="run even on a server older than the verified version (newer and unparseable versions run with a warning by default)")
+                    help="run even on a server older than the oldest verified version (versions newer than the verified ones, unverified versions in between, and unparseable versions run with a warning by default)")
     ap.add_argument("--files", action="store_true",
                     help="enable file rollback (files:true; files the work after the boundary touched are returned to the boundary point; hand edits or other sessions' changes made after the question are lost)")
     args = ap.parse_args()

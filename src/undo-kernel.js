@@ -48,7 +48,7 @@ const ZERO_WIDTH_SPACE = "\u200b";
 // both sides to the released version together).
 // INSTR-BEGIN
 export const INSTRUCTION_FRAME = [
-  "[q_undo v0.6.2] Instruction: invalidate the previous question answer and re-present the same question",
+  "[q_undo v0.7.0] Instruction: invalidate the previous question answer and re-present the same question",
   "",
   "1. The question tool call in the previous assistant step and all of its selection results are void. Do not build on that selection.",
   "2. Re-run exactly the question tool call shown in the payload below. Keep the question text, the header, every option's label and description, and the multiple value verbatim, including counts and order.",
@@ -221,11 +221,11 @@ export function buildInstruction(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Version-gate comparison (v0.5.0). The runtime version-gate verdict is one of four
-// tokens ("same" | "newer" | "older" | "unknown"; parity check #12 verifies the
-// vocabulary). "newer" means the server is ahead of the pin. Unparseable forms
-// (suffixes, dev builds, non-strings) are "unknown", and callers treat that as
-// "probably newer": warn and run.
+// Version-gate comparison (v0.5.0). compareVersions returns one of four tokens
+// ("same" | "newer" | "older" | "unknown") and gateVerdict returns one of five
+// ("unverified" is added; parity check #12 verifies the vocabulary). "newer" means
+// the server is ahead of the verified set. Unparseable forms (suffixes, dev builds,
+// non-strings) are "unknown", and callers treat that as "probably newer": warn and run.
 // Strict x.y.z parse (1-9 digits per segment; the digit bound prevents pathological
 // numeric cost/precision input; lenient suffix stripping would create a second,
 // undocumented comparison path).
@@ -247,6 +247,45 @@ export function compareVersions(found, pinned) {
     if (a[i] !== b[i]) return a[i] < b[i] ? "older" : "newer";
   }
   return "same";
+}
+
+// ---------------------------------------------------------------------------
+// Set of verified OpenCode versions (v0.7.0). The version gate accepts this set
+// instead of a single pin. Rule for adding an entry: a new OpenCode version joins
+// the verified set only after it is measured on all three surfaces (Desktop, Web
+// UI, TUI). 2.3.2 has that full measurement; 2.4.0 and 2.4.1 predate the rule and
+// were measured on the running server, the CLI boundary calculation and command
+// registration only. Mirror: VERIFIED_VERSIONS in tools/undo_core.py (parity check
+// #14 verifies the two sets and that the pin equals the newest entry).
+// ---------------------------------------------------------------------------
+export const VERIFIED_VERSIONS = ["2.3.2", "2.4.0", "2.4.1"];
+
+// gateVerdict(found, verified) → "same" | "newer" | "unverified" | "older" | "unknown".
+//   same       listed in the verified set (runs silently)
+//   newer      newer than the newest verified version (warns and runs)
+//   unverified between the oldest and newest verified version but not listed itself
+//              (warns and runs: the versions around it work, so this one probably does)
+//   older      older than the oldest verified version (refused)
+//   unknown    unparseable form, and an empty or wholly unparseable set (warns and runs;
+//              parity check #14 prevents the refusal from disappearing upstream)
+// `verified` must be an array (a string or a non-iterable argument is "unknown", matching the
+// Python side's list/tuple guard).
+export function gateVerdict(found, verified) {
+  if (parseVersion(found) === null) return "unknown";
+  if (!Array.isArray(verified)) return "unknown";
+  const known = verified.filter((v) => parseVersion(v) !== null);
+  if (known.length === 0) return "unknown";
+  if (known.includes(found)) return "same";
+  let lo = known[0];
+  let hi = known[0];
+  for (const v of known) {
+    if (compareVersions(v, hi) === "newer") hi = v;
+    if (compareVersions(v, lo) === "older") lo = v;
+  }
+  if (compareVersions(found, hi) === "newer") return "newer";
+  // decided by whether it is older than the minimum (a form that is numerically equal to the
+  // minimum but textually different, e.g. "2.3.02", is not refused)
+  return compareVersions(found, lo) === "older" ? "older" : "unverified";
 }
 
 // ---------------------------------------------------------------------------

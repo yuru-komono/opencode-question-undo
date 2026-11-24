@@ -31,18 +31,23 @@ import path from "node:path";
 import {
   MAX_INSTRUCTION_CHARS,
   PayloadTooLarge,
+  VERIFIED_VERSIONS,
   buildInstruction,
   compareMessages,
   compareVersions,
   computeWorkBoundary,
   extractPayload,
+  gateVerdict,
   resolveFilesMode,
   tailOutcome,
 } from "./undo-kernel.js";
 
-// Server version gate. Verified only on this value (v2.4.1; the 2.4.0 and 2.3.2 measurements are in history).
-// Gate policy (v0.5.0): newer and unparseable versions warn and run; older is refused.
-// The engines "2.4.1" in package.json records the verified version, not an accepted range (see README).
+// The verified version set lives in src/undo-kernel.js (VERIFIED_VERSIONS, v0.7.0 onward).
+// PINNED_VERSION is its newest entry: it names the measured version in warnings and in the
+// package.json engines field, and is not the accepted range (see README).
+// Gate policy (v0.7.0): a member of the verified set runs silently; a version newer than the
+// newest entry, an unlisted version between the oldest and the newest, and an unparseable
+// version warn and run; a version older than the oldest entry is refused.
 const PINNED_VERSION = "2.4.1";
 
 // Boundary mode. afterQuestionStep is measured on v2.3.2 and re-verified on v2.4.0 and v2.4.1 (v0.5.1, v0.5.3).
@@ -93,11 +98,11 @@ const TEXT = {
   applyDescription: "send the stored re-prompt instruction for the staged revert (sending commits the stage)",
   cancelDescription: "clear the staged revert and drop the record (only valid before a new send)",
   versionMismatch: (found) =>
-    `The server version is ${found}, older than the verified ${PINNED_VERSION}. Refusing to run. ` +
+    `The server version is ${found}, older than the oldest verified version (${VERIFIED_VERSIONS.join(" / ")}). Refusing to run. ` +
     "To run on an older server anyway, use tools/smoke.py with --allow-version-drift (CLI only, at your own risk).",
   versionDrift: (found, verdict) =>
-    `question-undo: the server version is ${found} (verified: ${PINNED_VERSION}; verdict ${verdict}). ` +
-    "Continuing with a warning only: behavior is guaranteed only on the verified version.",
+    `question-undo: the server version is ${found} (verified: ${VERIFIED_VERSIONS.join(" / ")}; verdict ${verdict}). ` +
+    "Continuing with a warning only: behavior is guaranteed only on the verified versions.",
   filesSemantics: (found) =>
     `question-undo: file rollback (files:true) is measured on the verified ${PINNED_VERSION}. Server ${found} is unverified, and how revert.files is stored and restored may change in the future (upstream #15391).`,
   cliMissing: "The server process cannot resolve the opencode CLI. Check PATH or set the QUESTION_UNDO_CLI environment variable.",
@@ -349,23 +354,30 @@ function lastUserTextBefore(messages, boundaryMessage) {
 // The version string is externally supplied (SDK / API) and reaches the server log and the
 // 500 message. To keep newlines or ANSI from forging log lines, display it only when it is
 // printable ASCII ≤32 chars; anything else displays as "unknown" (the verdict itself is
-// handled as unknown by compareVersions). Mirror: the display_version regex in tools/smoke.py
+// handled as unknown by gateVerdict). Mirror: the display_version regex in tools/smoke.py
 // — a hand-mirrored pair; update both sides together.
 const DISPLAY_VERSION_RE = /^[\x20-\x7e]{1,32}$/;
 const displayVersion = (v) => (typeof v === "string" && DISPLAY_VERSION_RE.test(v) ? v : "unknown");
 
-// Version gate (v0.5.0): only "older" throws (surfaced as HTTP 500 on all three surfaces).
-// "newer" / "unknown" warn via console.error and continue (the server ctx has no non-blocking
-// user-facing channel; see README limitations). The warning is evaluated per execution, never cached.
+// Version gate (v0.7.0): only "older" (older than the oldest verified version) throws, surfaced
+// as HTTP 500 on all three surfaces. "newer" / "unverified" / "unknown" warn via console.error and
+// continue (the server ctx has no non-blocking user-facing channel; see README limitations).
+// "unverified" is a version at or above the oldest entry and at or below the newest one that is
+// not itself listed. The warning is evaluated per execution, never cached.
 function gate(ctx, filesEnabled = false) {
-  const verdict = compareVersions(ctx.app.version, PINNED_VERSION);
+  const verdict = gateVerdict(ctx.app.version, VERIFIED_VERSIONS);
   if (verdict === "older") throw new Error(TEXT.versionMismatch(displayVersion(ctx.app.version)));
   if (verdict !== "same") {
     console.error(TEXT.versionDrift(displayVersion(ctx.app.version), verdict));
-    // The restore semantics of files:true are measured only on the verified version: on an
-    // unverified server how revert.files is stored and restored may change (upstream #15391).
-    // Warn only on the stage path (undoAnswer) and only when files is enabled.
-    if (filesEnabled) console.error(TEXT.filesSemantics(displayVersion(ctx.app.version)));
+  }
+  // The restore semantics of files:true are measured on PINNED_VERSION (the newest verified
+  // version, i.e. the last one measured). On any other server, including older members of the
+  // verified set, how revert.files is stored and restored may change (upstream #15391). This is
+  // deliberately not keyed to set membership: with v0.7.0 making 2.3.2 and 2.4.0 "same", keying
+  // it there would silence the notice for exactly those versions. Warn only on the stage path
+  // (undoAnswer) and only when files is enabled.
+  if (filesEnabled && compareVersions(ctx.app.version, PINNED_VERSION) !== "same") {
+    console.error(TEXT.filesSemantics(displayVersion(ctx.app.version)));
   }
 }
 
